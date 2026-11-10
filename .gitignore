@@ -1,0 +1,14 @@
+node_modules
+.env
+.env.*
+!.env.example
+dist
+.expo
+*.log
+.DS_Store
+.agents/
+.claude/
+
+# Generated native projects (Continuous Native Generation): never commit
+/apps/mobile/android
+/apps/mobile/ios

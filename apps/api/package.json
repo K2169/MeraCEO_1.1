@@ -1,0 +1,36 @@
+{
+  "name": "@meraceo/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file=.env --import tsx src/server.ts",
+    "start": "node --env-file=.env --import tsx src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests scripts",
+    "test": "vitest run",
+    "demo:add": "node --env-file=.env --import tsx scripts/demo-professionals.ts add",
+    "demo:remove": "node --env-file=.env --import tsx scripts/demo-professionals.ts remove",
+    "pros": "node --env-file=.env --import tsx scripts/professionals.ts",
+    "demo:request": "node --env-file=.env --import tsx scripts/demo-professionals.ts request"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.6",
+    "eslint": "^10.14.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^2.1.9"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1164.0",
+    "@aws-sdk/s3-request-presigner": "^3.1164.0",
+    "@meraceo/shared": "workspace:*",
+    "fastify": "^5.12.8",
+    "google-auth-library": "^11.3.3",
+    "jose": "^6.2.15",
+    "mongodb": "^7.8.0",
+    "zod": "^3.25.76"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "meraceo",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.34.9",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "lint": "pnpm -r --if-present run lint",
+    "test": "pnpm -r --if-present run test",
+    "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "mobile": "pnpm --filter @meraceo/mobile start",
+    "web": "pnpm --filter @meraceo/mobile web"
+  }
+}
