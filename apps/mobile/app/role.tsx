@@ -6,6 +6,7 @@ import { ChoiceCard } from '@/components/choice-card';
 import { Screen } from '@/components/screen';
 import { useTheme } from '@/components/use-theme';
 import { progress } from '@/features/auth/progress-store';
+import { useSession } from '@/features/auth/session-provider';
 import { t } from '@/i18n';
 
 // Role choice: two big cards, each with a short list of what you get. The pick is kept until
@@ -13,11 +14,13 @@ import { t } from '@/i18n';
 export default function RoleSelection() {
   const { colors, space, type } = useTheme();
   const router = useRouter();
+  const { user } = useSession();
 
   // Remember the pick, then go to sign-in.
   async function choose(role: 'owner' | 'professional') {
     await progress.setIntendedRole(role);
-    router.push('/sign-in' as Href);
+    if (user) router.replace('/' as Href);
+    else router.push('/sign-in' as Href);
   }
 
   return (

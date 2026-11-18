@@ -1,16 +1,19 @@
 import { type Href, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { Share, Text, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Share, Text, View } from 'react-native';
 
 import { BottomSheet } from '@/components/bottom-sheet';
 import { Button } from '@/components/button';
+import { SelectField } from '@/components/select-field';
 import { TabScreen } from '@/components/tab-screen';
 import { SettingsGroup, SettingsRow } from '@/components/settings-list';
 import { useTheme } from '@/components/use-theme';
 import { progress } from '@/features/auth/progress-store';
+import { signOutOfGoogle } from '@/features/auth/google-sign-in';
 import { useSession } from '@/features/auth/session-provider';
 import { api, type ConsentChoices } from '@/lib/api';
 import { t } from '@/i18n';
+import { initializePreferences, savePreferences, usePreferences } from '@/features/settings/preferences';
 
 type OptionalChoice = 'matching' | 'contact_sharing' | 'notifications';
 
@@ -24,12 +27,34 @@ export function SettingsScreen() {
   const [message, setMessage] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
+  const preferences = usePreferences();
+  const [info, setInfo] = useState<'help' | 'about' | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  // Keep local presentation choices across app launches.
+  useEffect(() => { void initializePreferences(); }, []);
+
+  // Publish a preference only after durable storage succeeds.
+  async function changePreference(patch: Parameters<typeof savePreferences>[0]) {
+    try {
+      await savePreferences(patch);
+      setMessage(null);
+    } catch { setMessage(t('settings.preferenceFailed')); }
+  }
+
+  // Recover a failed privacy-choice load without treating it as an empty account.
+  const loadChoices = useCallback(async () => {
+    if (!token) return;
+    setLoadFailed(false);
+    try { setChoices((await api.getConsents(token)).choices); }
+    catch { setLoadFailed(true); }
+  }, [token]);
 
   // Load the current privacy choices.
   useEffect(() => {
     if (!token) return;
-    api.getConsents(token).then((r) => setChoices(r.choices)).catch(() => undefined);
-  }, [token]);
+    void loadChoices();
+  }, [token, loadChoices]);
 
   // Save one changed choice. The switch moves straight away and moves back if saving fails.
   async function toggle(choice: OptionalChoice, granted: boolean) {
@@ -60,6 +85,7 @@ export function SettingsScreen() {
   // Leave: forget the session on this phone and go to the welcome screen.
   async function leave() {
     await progress.clearAll();
+    try { await signOutOfGoogle(); } catch { /* The app session must still be cleared if Google is offline. */ }
     await signOut();
     router.replace('/get-started' as Href);
   }
@@ -89,6 +115,14 @@ export function SettingsScreen() {
 
   return (
     <TabScreen title={t('settings.title')} back>
+      <View style={{ gap: space.md }}>
+        <SelectField label={t('settings.theme')} placeholder={t('common.select')} value={preferences.theme}
+          options={(['system', 'light', 'dark'] as const).map((value) => ({ value, label: t(`settings.theme.${value}`) }))}
+          onChange={(theme) => void changePreference({ theme })} />
+        <SelectField label={t('settings.language')} placeholder={t('common.select')} value={preferences.language}
+          options={[{ value: 'en', label: t('settings.language.en') }, { value: 'hi', label: t('settings.language.hi') }]}
+          onChange={(language) => void changePreference({ language })} />
+      </View>
       <SettingsGroup title={t('account.group.privacy')} footer={t('account.privacyNote2')}>
         {choices
           ? rows.map((row, index) => (
@@ -102,7 +136,16 @@ export function SettingsScreen() {
                 last={index === rows.length - 1}
               />
             ))
-          : null}
+          : loadFailed ? (
+            <View style={{ padding: space.lg, gap: space.md }}>
+              <Text accessibilityRole="alert" style={[type.body, { color: colors.danger }]}>{t('settings.loadFailed')}</Text>
+              <Button label={t('common.retry')} onPress={() => void loadChoices()} />
+            </View>
+          ) : <ActivityIndicator accessibilityLabel={t('common.loading')} color={colors.primary} style={{ padding: space.lg }} />}
+      </SettingsGroup>
+
+      <SettingsGroup>
+        <SettingsRow icon="lock-closed-outline" label={t('security.title')} onPress={() => router.push('/security' as Href)} last />
       </SettingsGroup>
 
       <SettingsGroup title={t('account.group.data')}>
@@ -111,6 +154,16 @@ export function SettingsScreen() {
       </SettingsGroup>
 
       {message ? <Text style={[type.caption, { color: colors.danger }]}>{message}</Text> : null}
+
+      <SettingsGroup title={t('settings.helpGroup')}>
+        <SettingsRow icon="information-circle-outline" label={t('settings.help')} onPress={() => router.push('/support' as Href)} />
+        <SettingsRow icon="information-circle-outline" label={t('settings.about')} onPress={() => setInfo('about')} last />
+      </SettingsGroup>
+      <BottomSheet visible={info !== null} onClose={() => setInfo(null)} title={t(`settings.${info ?? 'help'}`)}>
+        <View style={{ gap: space.md, paddingBottom: space.md }}>
+          <Text style={[type.body, { color: colors.text }]}>{t(info === 'about' ? 'settings.aboutBody' : 'settings.helpBody')}</Text>
+        </View>
+      </BottomSheet>
 
       <Button label={t('common.signOut')} variant="ghost" onPress={leave} />
 

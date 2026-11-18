@@ -5,6 +5,7 @@ export interface FormIssue {
   path: readonly PropertyKey[];
   code: string;
   minimum?: unknown;
+  maximum?: unknown;
 }
 
 // Maps schema issues to the fields of one step, using i18n copy only (rule 7).
@@ -16,6 +17,8 @@ export function errorsFor(issues: FormIssue[], fields: readonly string[]): Recor
     out[field] =
       issue.code === 'too_small' && typeof issue.minimum === 'number' && issue.minimum >= 2
         ? t('common.minLength', { min: issue.minimum })
+        : issue.code === 'too_big' && typeof issue.maximum === 'number'
+          ? t('common.maxSelections', { max: issue.maximum })
         : /^invalid_(string|format)$/.test(issue.code)
           ? t('common.invalid')
           : t('common.requiredField');

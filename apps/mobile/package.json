@@ -39,7 +39,7 @@
   "devDependencies": {
     "@types/react": "~19.3.0",
     "country-state-city": "^3.2.1",
-    "eslint": "^10.14.0",
+    "eslint": "^9.39.5",
     "eslint-config-expo": "^58.0.4",
     "typescript": "~6.0.3"
   },
@@ -50,7 +50,8 @@
     "web": "expo start --web",
     "build:places": "node scripts/build-places.mjs",
     "typecheck": "tsc --noEmit",
-    "lint": "expo lint"
+    "lint": "pnpm check:i18n && expo lint",
+    "check:i18n": "node scripts/check-i18n.mjs"
   },
   "private": true,
   "main": "expo-router/entry"

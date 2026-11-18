@@ -30,6 +30,35 @@ describe('matchProfessional', () => {
     const noFormat = { expertise: need.expertise, industry: need.industry, budgetBand: need.budgetBand };
     expect(matchProfessional(pro, noFormat).score).toBe(95);
   });
+
+  it('matches a PRD advisory industry in addition to the professional\'s primary industry', () => {
+    const advisor = { ...pro, industry: 'manufacturing' as const, industriesAdvised: ['retail'] as const };
+    expect(matchProfessional(advisor, need).reasons).toContain('industry');
+    expect(matchProfessional(advisor, need).score).toBe(100);
+  });
+
+  it('adds a business-profile fit when the owner stage is explicitly preferred', () => {
+    const profileNeed = {
+      ...need,
+      businessProfile: { teamSize: '2_10' as const, revenue: 'lt_10_lakh' as const },
+    };
+    const advisor = {
+      ...pro,
+      feeBand: 'high' as const,
+      preferredTeamSizes: ['2_10'] as const,
+      preferredRevenueBands: ['lt_10_lakh'] as const,
+    };
+    const result = matchProfessional(advisor, profileNeed);
+    expect(result.score).toBe(90);
+    expect(result.reasons).toContain('business_profile');
+  });
+
+  it('does not infer a business-profile fit when owner data is missing', () => {
+    const advisor = { ...pro, preferredTeamSizes: ['2_10'] as const };
+    const result = matchProfessional(advisor, need);
+    expect(result.reasons).not.toContain('business_profile');
+    expect(result.score).toBe(100);
+  });
 });
 
 describe('rankMatches', () => {

@@ -1,6 +1,8 @@
 import { createContext, type ReactNode, useContext } from 'react';
 import { useColorScheme, View } from 'react-native';
 
+import { usePreferences } from '@/features/settings/preferences';
+
 import { palette, radius, shadow, space, type, type ThemeColors } from './theme';
 
 type Scheme = 'light' | 'dark';
@@ -30,6 +32,7 @@ export function ThemeScope({ scheme, children }: { scheme: Scheme; children: Rea
 export function useTheme(): AppTheme {
   const scope = useContext(ThemeScopeContext);
   const device = useColorScheme();
-  const dark = (scope ?? device) === 'dark';
+  const preference = usePreferences().theme;
+  const dark = (scope ?? (preference === 'system' ? device : preference)) === 'dark';
   return { colors: dark ? palette.dark : palette.light, space, radius, type, shadow, dark };
 }

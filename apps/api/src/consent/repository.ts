@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
-import type { Collection, Db } from 'mongodb';
+import { ObjectId, type Collection, type Db } from 'mongodb';
 
 // Plan W3-04: one event per consent choice. Events are only ever inserted, never updated or deleted.
 export const CONSENT_TYPES = ['matching', 'contact_sharing', 'notifications', 'terms'] as const;
@@ -15,8 +15,12 @@ export interface ConsentEvent {
   createdAt: Date;
 }
 
+// An optional stable key lets registration retries re-use the same append-only events.
+// Subsequent preference changes use a new key and are still recorded as new events.
+export type ConsentWrite = Omit<ConsentEvent, 'id' | 'createdAt'> & { idempotencyKey?: string };
+
 export interface ConsentRepository {
-  record(events: Omit<ConsentEvent, 'id' | 'createdAt'>[], now?: Date): Promise<void>;
+  record(events: ConsentWrite[], now?: Date): Promise<void>;
   listForUser(userId: string): Promise<ConsentEvent[]>;
 }
 
@@ -28,9 +32,28 @@ export class MongoConsentRepository implements ConsentRepository {
     this.events = db.collection<ConsentEvent>('consent_events');
   }
 
-  async record(events: Omit<ConsentEvent, 'id' | 'createdAt'>[], now = new Date()): Promise<void> {
+  async record(events: ConsentWrite[], now = new Date()): Promise<void> {
     if (events.length === 0) return;
-    await this.events.insertMany(events.map((e) => ({ ...e, id: randomUUID(), createdAt: now })));
+    for (const event of events) {
+      const { idempotencyKey, ...choice } = event;
+      const stableId = idempotencyKey
+        ? createHash('sha256').update(`${choice.userId}:${idempotencyKey}:${choice.noticeVersion}:${choice.consentType}`).digest('hex')
+        : randomUUID();
+      const document = {
+        ...choice,
+        id: stableId,
+        ...(idempotencyKey ? { _id: ObjectId.createFromHexString(stableId.slice(0, 24)) } : {}),
+        createdAt: now,
+      };
+      try {
+        await this.events.insertOne(document);
+      } catch (error) {
+        // Mongo's built-in unique _id constraint makes concurrent retries safe without
+        // mutating or replacing the original append-only consent event.
+        if (idempotencyKey && isDuplicateKeyError(error)) continue;
+        throw error;
+      }
+    }
   }
 
   async listForUser(userId: string): Promise<ConsentEvent[]> {
@@ -41,12 +64,25 @@ export class MongoConsentRepository implements ConsentRepository {
 // Stores consent choices in memory. Used by tests.
 export class InMemoryConsentRepository implements ConsentRepository {
   private readonly all: ConsentEvent[] = [];
+  private readonly idempotencyKeys = new Set<string>();
 
-  async record(events: Omit<ConsentEvent, 'id' | 'createdAt'>[], now = new Date()): Promise<void> {
-    for (const e of events) this.all.push({ ...e, id: randomUUID(), createdAt: now });
+  async record(events: ConsentWrite[], now = new Date()): Promise<void> {
+    for (const event of events) {
+      const { idempotencyKey, ...choice } = event;
+      const idempotencyId = idempotencyKey
+        ? `${choice.userId}:${idempotencyKey}:${choice.noticeVersion}:${choice.consentType}`
+        : null;
+      if (idempotencyId && this.idempotencyKeys.has(idempotencyId)) continue;
+      if (idempotencyId) this.idempotencyKeys.add(idempotencyId);
+      this.all.push({ ...choice, id: idempotencyId ?? randomUUID(), createdAt: now });
+    }
   }
 
   async listForUser(userId: string): Promise<ConsentEvent[]> {
     return this.all.filter((e) => e.userId === userId).map((e) => ({ ...e }));
   }
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 11000;
 }

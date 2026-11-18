@@ -1,33 +1,44 @@
+import { randomUUID } from 'node:crypto';
 import Fastify from 'fastify';
 import {
   EXPERTISE_IDS,
+  DAYS,
   FEE_BANDS,
   FORMATS,
   INDUSTRY_IDS,
+  hasContactInformation,
   createNeedSchema,
   createRequestSchema,
+  isWithinAvailability,
   transitionRequest,
   REQUEST_ERROR_CODES,
   type OwnerOnboarding,
   matchProfessional,
   ownerOnboardingSchema,
+  ownerRegistrationSchema,
   professionalOnboardingSchema,
+  professionalRegistrationSchema,
   rankMatches,
   type ProfessionalOnboarding,
 } from '@meraceo/shared';
 import { z } from 'zod';
 
 import { AuthError, type GoogleVerifier } from './auth/google.js';
+import { hashPassword, validPassword, verifyPassword } from './auth/password.js';
 import { issueSessionToken, verifySessionToken } from './auth/session.js';
 import { CONSENT_TYPES, type ConsentEvent, type ConsentRepository } from './consent/repository.js';
 import type { NotificationRepository, NotificationType } from './notifications/repository.js';
 import type { SavedRepository } from './saved/repository.js';
-import type { NeedRepository } from './needs/repository.js';
-import type { RequestRecord, RequestRepository } from './requests/repository.js';
+import { DuplicateNeedError, type NeedRecord, type NeedRepository } from './needs/repository.js';
+import { ActiveRequestExistsError, LegacyScheduleError, SlotConflictError, type RequestRecord, type RequestRepository } from './requests/repository.js';
 import type { ProfileRepository } from './profiles/repository.js';
 import { UPLOAD_KINDS } from './storage/presign.js';
 import type { Storage } from './storage/storage.js';
+import { validUploadedImage } from './storage/validate-upload.js';
 import { RoleAlreadySetError, type UserRecord, type UserRepository } from './users/repository.js';
+import type { GrievanceRepository } from './grievances/repository.js';
+import { registerGrievanceRoutes } from './grievances/routes.js';
+import type { MessageRepository } from './messages/repository.js';
 
 export interface AppDeps {
   sessionSecret: string;
@@ -37,21 +48,33 @@ export interface AppDeps {
   profiles: ProfileRepository;
   needs: NeedRepository;
   requests: RequestRepository;
+  messages: MessageRepository;
   notifications: NotificationRepository;
   saved: SavedRepository;
   storage: Storage;
+  grievances?: GrievanceRepository;
+  supportEmail?: string;
 }
 
 // Version of the privacy notice the app shows. Bump it when W3-06 approves new wording.
 export const NOTICE_VERSION = 'draft-1';
 
+// Owners see a display alias only when the Professional explicitly enabled discreet mode.
+// Legacy profiles without these fields preserve their existing full-name behavior.
+function professionalPublicName(profile: Pick<ProfessionalOnboarding, 'name' | 'displayName' | 'discreetMode'>): string {
+  return profile.discreetMode && profile.displayName?.trim() ? profile.displayName.trim() : profile.name;
+}
+
 const googleBody = z.object({ idToken: z.string().min(20).max(4096) });
+const passwordLoginBody = z.object({ identifier: z.string().trim().min(3).max(254), password: z.string().min(1).max(256) });
+const passwordSetupBody = z.object({ password: z.string().min(12).max(128) });
 const presignBody = z.object({
   kind: z.enum(Object.keys(UPLOAD_KINDS) as [keyof typeof UPLOAD_KINDS, ...(keyof typeof UPLOAD_KINDS)[]]),
   contentType: z.string().max(100),
 });
 const actionBody = z.object({ action: z.enum(['accept', 'decline', 'cancel', 'complete']) });
-const scheduleBody = z.object({ startsAt: z.string().datetime() });
+const messageBody = z.object({ body: z.string().trim().min(1).max(2000) });
+const scheduleBody = z.object({ startsAt: z.string().datetime(), proposalId: z.string().uuid().optional() });
 // Search and filters for the Discover tab and the opportunity feed. Every part is optional.
 const searchQuery = z.object({
   q: z.string().trim().max(80).optional(),
@@ -64,18 +87,61 @@ const searchQuery = z.object({
   needId: z.string().max(64).optional(),
   // Only the professionals the owner has saved.
   saved: z.enum(['true']).optional(),
+  // Show professionals who have a complete, structured consultation schedule.
+  availability: z.enum(['configured']).optional(),
 });
 // True when every word typed appears somewhere in the text (case does not matter).
 const matchesText = (text: string, query: string) => query.toLowerCase().split(/\s+/).filter(Boolean).every((word) => text.toLowerCase().includes(word));
+
+function publicNeed(need: NeedRecord): Omit<NeedRecord, 'dedupeKey'> {
+  const result = { ...need };
+  delete result.dedupeKey;
+  return result;
+}
+
+function hasConfiguredAvailability(profile: Pick<ProfessionalOnboarding, 'availabilityWindows' | 'timezone' | 'durationMinutes'>): boolean {
+  if (!profile.timezone || !profile.durationMinutes || !Number.isInteger(profile.durationMinutes) || profile.durationMinutes <= 0) return false;
+  try { new Intl.DateTimeFormat('en-US', { timeZone: profile.timezone }); } catch { return false; }
+  const windows = profile.availabilityWindows;
+  if (!Array.isArray(windows) || windows.length === 0) return false;
+  return windows.every(({ day, startTime, endTime }) => DAYS.includes(day)
+    && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(startTime)
+    && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(endTime)
+    && endTime > startTime);
+}
+
+type ThrottleBucket = { count: number; resetAt: number };
+function consumePasswordAttempt(buckets: Map<string, ThrottleBucket>, key: string, now: number): boolean {
+  for (const [bucketKey, bucket] of buckets) if (bucket.resetAt <= now) buckets.delete(bucketKey);
+  const current = buckets.get(key);
+  if (current && current.count >= 10) return false;
+  if (!current) {
+    // Cap distinct principals so rotating source addresses cannot grow this process-local throttle forever.
+    if (buckets.size >= 10_000) return false;
+    buckets.set(key, { count: 1, resetAt: now + 15 * 60_000 });
+  } else current.count += 1;
+  return true;
+}
 
 const photoBody = z.object({ key: z.string().min(10).max(200) });
 const roleBody = z.object({ role: z.enum(['owner', 'professional']) });
 const ageBody = z.object({ dateOfBirth: z.string().refine(isValidDateOfBirth) });
 const consentBody = z.object({
+  // Re-used on every retry of the same onboarding submission. Later preference changes
+  // must use a new key so the consent log remains append-only.
+  idempotencyKey: z.string().min(16).max(128).optional(),
   consents: z
     .array(z.object({ type: z.enum(CONSENT_TYPES), granted: z.boolean() }))
     .min(1)
     .max(CONSENT_TYPES.length),
+}).superRefine(({ consents }, ctx) => {
+  const seen = new Set<string>();
+  for (const [index, choice] of consents.entries()) {
+    if (seen.has(choice.type)) {
+      ctx.addIssue({ code: 'custom', path: ['consents', index, 'type'], message: 'Consent type can appear only once' });
+    }
+    seen.add(choice.type);
+  }
 });
 
 // The latest choice for each consent type, from the full history. A type never answered is null.
@@ -105,7 +171,7 @@ function isAtLeast18(dateOfBirth: string, now: Date): boolean {
 export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
   // Never log tokens or request bodies (plan rule 4).
   const app = Fastify({
-    logger: options.logger === false ? false : { redact: ['req.headers.authorization', 'req.body.idToken', 'req.body.dateOfBirth'] },
+    logger: options.logger === false ? false : { redact: ['req.headers.authorization', 'req.body.idToken', 'req.body.dateOfBirth', 'req.body.password', 'req.body.identifier', 'req.body.body'] },
   });
 
   async function userIdFromHeader(authorization: string | undefined): Promise<string | null> {
@@ -128,7 +194,15 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     return user;
   }
 
-  // Picks the user fields that are safe to send to the app (never the email).
+  registerGrievanceRoutes(app, {
+    grievances: deps.grievances,
+    requests: deps.requests,
+    requireUser,
+    supportEmail: deps.supportEmail ?? 'krishnam@meraceo.com',
+  });
+
+  // Returns the signed-in person's private account fields. Public profile/list routes use
+  // explicit allowlists and never include this email.
   // profileComplete and consentDone come from the server, so they survive a reinstall.
   async function publicUser(user: UserRecord) {
     const profile = await deps.profiles.findByUserId(user.id);
@@ -136,6 +210,7 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     return {
       id: user.id,
       name: user.name,
+      email: user.email,
       // Legacy records created before these fields existed read as null, never as missing.
       role: user.role ?? null,
       ageConfirmed: user.ageConfirmed ?? null,
@@ -177,6 +252,37 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
       if (err instanceof AuthError) return reply.code(401).send({ error: err.reason });
       throw err;
     }
+  });
+
+  // Password login is available only for an email verified through Google. Return the same
+  // response for unknown accounts and bad passwords; throttle repeated guesses per source IP.
+  const passwordLoginAttempts = new Map<string, ThrottleBucket>();
+  const passwordSetupAttempts = new Map<string, ThrottleBucket>();
+  app.post('/auth/password', async (req, reply) => {
+    if (!consumePasswordAttempt(passwordLoginAttempts, req.ip, Date.now())) return reply.code(429).send({ error: 'invalid_credentials' });
+    const body = passwordLoginBody.safeParse(req.body);
+    if (!body.success) return reply.code(401).send({ error: 'invalid_credentials' });
+    const identifier = body.data.identifier.trim().toLowerCase();
+    const user = identifier.includes('@') ? await deps.users.findByVerifiedEmail(identifier) : null;
+    const boundHash = user?.emailVerified === true && user.passwordEmail === user.email ? user.passwordHash : undefined;
+    const valid = await verifyPassword(body.data.password, boundHash);
+    if (!user || !valid) return reply.code(401).send({ error: 'invalid_credentials' });
+    const sessionToken = await issueSessionToken(user.id, deps.sessionSecret);
+    return { sessionToken, user: await publicUser(user) };
+  });
+
+  // Provision or replace a password only on a verified Google-backed account session.
+  app.put('/me/password', async (req, reply) => {
+    const user = await requireUser(req.headers.authorization, reply);
+    if (!user) return reply;
+    if (!consumePasswordAttempt(passwordSetupAttempts, user.id, Date.now())) return reply.code(429).send({ error: 'too_many_attempts' });
+    const body = passwordSetupBody.safeParse(req.body);
+    if (!body.success || !validPassword(body.data.password)) return reply.code(400).send({ error: 'invalid_password' });
+    if (!user.email || user.emailVerified !== true) return reply.code(403).send({ error: 'verified_email_required' });
+    const passwordHash = await hashPassword(body.data.password);
+    const saved = await deps.users.setPassword(user.id, user.email, passwordHash);
+    if (!saved) return reply.code(403).send({ error: 'verified_email_required' });
+    return { saved: true };
   });
 
   app.get('/me', async (req, reply) => {
@@ -230,6 +336,7 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
         consentType: c.type,
         granted: c.granted,
         noticeVersion: NOTICE_VERSION,
+        ...(body.data.idempotencyKey ? { idempotencyKey: body.data.idempotencyKey } : {}),
       })),
     );
     if (user.role === 'professional' && body.data.consents.some((c) => c.type === 'matching' && !c.granted)) {
@@ -274,6 +381,7 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     const user = await requireUser(req.headers.authorization, reply);
     if (!user) return reply;
     await deps.requests.deleteForUser(user.id);
+    await deps.messages.deleteForUser(user.id);
     await deps.notifications.deleteForUser(user.id);
     await deps.saved.deleteForOwner(user.id);
     await deps.saved.deleteForProfessional(user.id);
@@ -292,7 +400,10 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     if (!user) return reply;
     if (user.ageConfirmed !== true) return reply.code(403).send({ error: 'age_not_confirmed' });
     if (!user.role) return reply.code(403).send({ error: 'role_not_set' });
-    const schema = user.role === 'owner' ? ownerOnboardingSchema : professionalOnboardingSchema;
+    const existingProfile = await deps.profiles.findByUserId(user.id);
+    const schema = user.role === 'owner'
+      ? existingProfile ? ownerOnboardingSchema : ownerRegistrationSchema
+      : existingProfile ? professionalOnboardingSchema : professionalRegistrationSchema;
     const body = schema.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: 'invalid_profile' });
     await deps.profiles.save(user.id, user.role, body.data);
@@ -300,15 +411,21 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     // so saving the profile again never adds a duplicate.
     if (user.role === 'owner' && (await deps.needs.listByOwner(user.id)).length === 0) {
       const answers = ownerOnboardingSchema.parse(body.data);
-      await deps.needs.create(user.id, {
-        title: answers.needTitle,
-        challenge: answers.challenge,
-        goals: answers.goals,
-        expertise: answers.needExpertise,
-        industry: answers.industry,
-        budgetBand: answers.budgetBand,
-        format: answers.preferredFormat,
-      });
+      try {
+        await deps.needs.create(user.id, {
+          title: answers.needTitle,
+          challenge: answers.challenge,
+          timeline: answers.needTimeline,
+          goals: answers.goals,
+          expertise: answers.needExpertise,
+          industry: answers.industry,
+          budgetBand: answers.budgetBand,
+          format: answers.preferredFormat,
+        });
+      } catch (error) {
+        // A concurrent onboarding retry may have created the initial need after the count check.
+        if (!(error instanceof DuplicateNeedError)) throw error;
+      }
     }
     return await publicUser(user);
   });
@@ -330,32 +447,36 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     if (user.role !== 'owner') return reply.code(403).send({ error: 'owners_only' });
     const query = searchQuery.safeParse(req.query);
     if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
-    const { q, expertise, industry, fee, format, needId, saved: onlySaved } = query.data;
+    const { q, expertise, industry, fee, format, needId, saved: onlySaved, availability } = query.data;
     const savedIds = new Set(await deps.saved.listForOwner(user.id));
 
     const openNeeds = (await deps.needs.listByOwner(user.id)).filter((n) => n.status === 'open');
     const targets = needId ? openNeeds.filter((n) => n.id === needId) : openNeeds;
+    const ownerProfile = await deps.profiles.findByUserId(user.id);
+    const ownerData = ownerProfile?.role === 'owner' ? ownerProfile.data as Partial<OwnerOnboarding> : undefined;
+    const businessProfile = ownerData ? { teamSize: ownerData.teamSize, revenue: ownerData.revenue } : undefined;
     const sent = new Map((await deps.requests.listByOwner(user.id)).map((r) => [`${r.needId}:${r.professionalId}`, r.status]));
 
     const results = [];
     for (const profile of await matchablePool()) {
       const pro = profile.data as unknown as ProfessionalOnboarding;
-      if (q && !matchesText(`${pro.name} ${pro.headline} ${pro.experience} ${pro.city} ${pro.state ?? ''}`, q)) continue;
+      if (q && !matchesText(`${professionalPublicName(pro)} ${pro.headline} ${pro.experience} ${pro.city} ${pro.state ?? ''}`, q)) continue;
       if (expertise && !pro.expertise.includes(expertise)) continue;
-      if (industry && pro.industry !== industry) continue;
+      if (industry && pro.industry !== industry && !pro.industriesAdvised?.includes(industry)) continue;
       if (fee && FEE_BANDS.indexOf(pro.feeBand) > FEE_BANDS.indexOf(fee)) continue;
       if (format && !pro.formats.includes(format)) continue;
+      if (availability === 'configured' && !hasConfiguredAvailability(pro)) continue;
       if (onlySaved && !savedIds.has(profile.userId)) continue;
 
       // Best fit across the chosen needs.
       let best = { score: 0, reasons: [] as string[], matchedExpertise: [] as string[], needId: null as string | null };
       for (const need of targets) {
-        const result = matchProfessional(pro, { expertise: need.expertise, industry: need.industry, budgetBand: need.budgetBand, format: need.format });
+        const result = matchProfessional(pro, { expertise: need.expertise, industry: need.industry, budgetBand: need.budgetBand, format: need.format, businessProfile });
         if (result.score > best.score) best = { ...result, needId: need.id };
       }
       results.push({
         id: profile.userId,
-        name: pro.name,
+        name: professionalPublicName(pro),
         headline: pro.headline,
         country: pro.country,
         state: pro.state,
@@ -394,7 +515,7 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
       saved: isSaved,
       professional: {
         id,
-        name: pro.name,
+        name: professionalPublicName(pro),
         headline: pro.headline,
         country: pro.country,
         state: pro.state,
@@ -405,14 +526,21 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
         employmentType: pro.employmentType ?? null,
         qualification: pro.qualification,
         industry: pro.industry,
+        industriesAdvised: pro.industriesAdvised ?? [],
         experience: pro.experience ?? '',
         workHistory: pro.workHistory,
         skills: pro.skills ?? [],
         expertise: pro.expertise ?? [],
         feeBand: pro.feeBand,
         formats: pro.formats ?? [],
+        durationMinutes: pro.durationMinutes ?? null,
         engagementType: pro.engagementType ?? null,
         days: pro.days ?? [],
+        availabilityWindows: pro.availabilityWindows ?? [],
+        employmentHistory: (pro.employmentHistory ?? []).map(({ id, title, organization, startDate, endDate, current }) => ({ id, title, organization, startDate, ...(endDate ? { endDate } : {}), current })),
+        educationHistory: (pro.educationHistory ?? []).map(({ id, qualification, institution, fieldOfStudy, completionYear }) => ({ id, qualification, institution, ...(fieldOfStudy ? { fieldOfStudy } : {}), ...(completionYear ? { completionYear } : {}) })),
+        certifications: (pro.certifications ?? []).map(({ id, name, issuer, issueYear }) => ({ id, name, issuer, ...(issueYear ? { issueYear } : {}) })),
+        timezone: pro.timezone ?? null,
         photoUrl: profile.photoKey ? await deps.storage.readUrl(profile.photoKey) : null,
       },
       needs,
@@ -457,10 +585,16 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     for (const need of await deps.needs.listOpen()) {
       if (expertise && !need.expertise.includes(expertise)) continue;
       if (industry && need.industry !== industry) continue;
-      const result = matchProfessional(pro, { expertise: need.expertise, industry: need.industry, budgetBand: need.budgetBand, format: need.format });
-      if (result.score === 0) continue;
       const ownerProfile = await deps.profiles.findByUserId(need.ownerId);
       const owner = ownerProfile?.data as unknown as OwnerOnboarding | undefined;
+      const result = matchProfessional(pro, {
+        expertise: need.expertise,
+        industry: need.industry,
+        budgetBand: need.budgetBand,
+        format: need.format,
+        businessProfile: owner ? { teamSize: owner.teamSize, revenue: owner.revenue } : undefined,
+      });
+      if (result.score === 0) continue;
       if (q && !matchesText(`${need.title} ${need.challenge} ${owner?.businessName ?? ''}`, q)) continue;
       scored.push({
         id: need.id,
@@ -483,6 +617,60 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     return { opportunities: rankMatches(scored) };
   });
 
+  // P8: open one opportunity only when this professional is eligible for its matching feed.
+  // Business details are explicitly allowlisted; owner contact and private profile fields stay hidden.
+  app.get('/me/opportunities/:needId', async (req, reply) => {
+    const user = await requireUser(req.headers.authorization, reply);
+    if (!user) return reply;
+    if (user.role !== 'professional') return reply.code(403).send({ error: 'professionals_only' });
+    const { needId } = req.params as { needId: string };
+    const need = await deps.needs.findById(needId);
+    if (!need || need.status !== 'open') return reply.code(404).send({ error: 'opportunity_not_found' });
+
+    const professionalProfile = await deps.profiles.findByUserId(user.id);
+    if (!professionalProfile || professionalProfile.role !== 'professional') return reply.code(404).send({ error: 'opportunity_not_found' });
+    const professional = professionalProfile.data as unknown as ProfessionalOnboarding;
+    const ownerProfile = await deps.profiles.findByUserId(need.ownerId);
+    if (!ownerProfile || ownerProfile.role !== 'owner') return reply.code(404).send({ error: 'opportunity_not_found' });
+    const owner = ownerProfile.data as unknown as OwnerOnboarding;
+    const result = matchProfessional(professional, {
+      expertise: need.expertise,
+      industry: need.industry,
+      budgetBand: need.budgetBand,
+      format: need.format,
+      businessProfile: { teamSize: owner.teamSize, revenue: owner.revenue },
+    });
+    if (result.score === 0) return reply.code(404).send({ error: 'opportunity_not_found' });
+
+    return {
+      opportunity: {
+        id: need.id,
+        title: need.title,
+        challenge: need.challenge,
+        timeline: need.timeline ?? null,
+        goals: need.goals ?? null,
+        expertise: need.expertise,
+        industry: need.industry,
+        budgetBand: need.budgetBand ?? null,
+        format: need.format ?? null,
+        business: {
+          name: owner.businessName,
+          city: owner.city,
+          state: owner.state ?? null,
+          country: owner.country,
+          photoUrl: ownerProfile.photoKey ? await deps.storage.readUrl(ownerProfile.photoKey) : null,
+          industry: owner.industry,
+          businessType: owner.businessType ?? null,
+          sector: owner.sector ?? null,
+          description: owner.description,
+          teamSize: owner.teamSize ?? null,
+          revenue: owner.revenue ?? null,
+        },
+        ...result,
+      },
+    };
+  });
+
   // W5: an owner posts another need.
   app.post('/me/needs', async (req, reply) => {
     const user = await requireUser(req.headers.authorization, reply);
@@ -490,7 +678,12 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     if (user.role !== 'owner') return reply.code(403).send({ error: 'owners_only' });
     const body = createNeedSchema.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: 'invalid_need' });
-    return reply.code(201).send(await deps.needs.create(user.id, body.data));
+    try {
+      return reply.code(201).send(publicNeed(await deps.needs.create(user.id, body.data)));
+    } catch (error) {
+      if (error instanceof DuplicateNeedError) return reply.code(409).send({ error: 'duplicate_need' });
+      throw error;
+    }
   });
 
   // The owner's own needs, newest first.
@@ -498,7 +691,48 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     const user = await requireUser(req.headers.authorization, reply);
     if (!user) return reply;
     if (user.role !== 'owner') return reply.code(403).send({ error: 'owners_only' });
-    return { needs: await deps.needs.listByOwner(user.id) };
+    return { needs: (await deps.needs.listByOwner(user.id)).map(publicNeed) };
+  });
+
+  // Get one need for the owner who created it. Someone else's need looks missing.
+  app.get('/me/needs/:needId', async (req, reply) => {
+    const user = await requireUser(req.headers.authorization, reply);
+    if (!user) return reply;
+    if (user.role !== 'owner') return reply.code(403).send({ error: 'owners_only' });
+    const { needId } = req.params as { needId: string };
+    const need = await deps.needs.findById(needId);
+    if (!need || need.ownerId !== user.id) return reply.code(404).send({ error: 'need_not_found' });
+    return publicNeed(need);
+  });
+
+  // Edit only an open need owned by this business. Invalid content does not reach the repository.
+  app.put('/me/needs/:needId', async (req, reply) => {
+    const user = await requireUser(req.headers.authorization, reply);
+    if (!user) return reply;
+    if (user.role !== 'owner') return reply.code(403).send({ error: 'owners_only' });
+    const { needId } = req.params as { needId: string };
+    const body = createNeedSchema.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'invalid_need' });
+    let need;
+    try {
+      need = await deps.needs.update(user.id, needId, body.data);
+    } catch (error) {
+      if (error instanceof DuplicateNeedError) return reply.code(409).send({ error: 'duplicate_need' });
+      throw error;
+    }
+    if (!need) return reply.code(404).send({ error: 'need_not_found_or_closed' });
+    return publicNeed(need);
+  });
+
+  // Close one owner-scoped need. Closing twice is safe and returns the already closed need.
+  app.post('/me/needs/:needId/close', async (req, reply) => {
+    const user = await requireUser(req.headers.authorization, reply);
+    if (!user) return reply;
+    if (user.role !== 'owner') return reply.code(403).send({ error: 'owners_only' });
+    const { needId } = req.params as { needId: string };
+    const need = await deps.needs.close(user.id, needId);
+    if (!need) return reply.code(404).send({ error: 'need_not_found' });
+    return publicNeed(need);
   });
 
   // W5-01: professionals ranked for one of the owner's needs. Only approved, available professionals
@@ -514,6 +748,8 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
 
     // Requests the owner already sent for this need, so the app can show their status instead of a Send button.
     const sent = new Map((await deps.requests.listByOwner(user.id)).filter((r) => r.needId === need.id).map((r) => [r.professionalId, r.status]));
+    const ownerProfile = await deps.profiles.findByUserId(user.id);
+    const owner = ownerProfile?.role === 'owner' ? ownerProfile.data as Partial<OwnerOnboarding> : undefined;
     const scored = await Promise.all((await matchablePool()).map(async (profile) => {
       const pro = profile.data as unknown as ProfessionalOnboarding;
       const result = matchProfessional(pro, {
@@ -521,10 +757,11 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
         industry: need.industry,
         budgetBand: need.budgetBand,
         format: need.format,
+        businessProfile: owner ? { teamSize: owner.teamSize, revenue: owner.revenue } : undefined,
       });
       return {
         id: profile.userId,
-        name: pro.name,
+        name: professionalPublicName(pro),
         headline: pro.headline,
         country: pro.country,
         state: pro.state,
@@ -538,18 +775,23 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
         ...result,
       };
     }));
-    return { need, matches: rankMatches(scored) };
+    return { need: publicNeed(need), matches: rankMatches(scored) };
   });
 
   // Builds what each side sees of a request. Neither side ever gets the other's email or contact details.
   async function requestView(request: RequestRecord, viewer: 'owner' | 'professional') {
     const need = await deps.needs.findById(request.needId);
-    const base = { id: request.id, status: request.status, note: request.note ?? null, createdAt: request.createdAt, scheduledAt: request.scheduledAt ?? null };
+    const proProfile = await deps.profiles.findByUserId(request.professionalId);
+    const pro = proProfile?.data as unknown as ProfessionalOnboarding | undefined;
+    const consultation = {
+      durationMinutes: request.durationMinutes ?? pro?.durationMinutes ?? null,
+      timezone: pro?.timezone ?? null,
+      availabilityWindows: pro?.availabilityWindows?.map(({ day, startTime, endTime }) => ({ day, startTime, endTime })) ?? [],
+    };
+    const base = { id: request.id, status: request.status, note: request.note ?? null, createdAt: request.createdAt, scheduledAt: request.scheduledAt ?? null, pendingSchedule: request.pendingSchedule ?? null, consultation };
     if (viewer === 'owner') {
-      const proProfile = await deps.profiles.findByUserId(request.professionalId);
-      const pro = proProfile?.data as unknown as ProfessionalOnboarding | undefined;
       const photoUrl = proProfile?.photoKey ? await deps.storage.readUrl(proProfile.photoKey) : null;
-      return { ...base, need: { id: request.needId, title: need?.title ?? '' }, professional: { id: request.professionalId, name: pro?.name ?? '', headline: pro?.headline ?? '', photoUrl } };
+      return { ...base, need: { id: request.needId, title: need?.title ?? '' }, professional: { id: request.professionalId, name: pro ? professionalPublicName(pro) : '', headline: pro?.headline ?? '', photoUrl } };
     }
     const ownerProfile = await deps.profiles.findByUserId(request.ownerId);
     const owner = ownerProfile?.data as unknown as OwnerOnboarding | undefined;
@@ -561,9 +803,10 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     };
   }
 
-  // Name to show for a person in a notification: their name from the profile, else their account name.
-  async function displayName(userId: string): Promise<string> {
+  // Name to show for a person in a notification, respecting a Professional's discreet mode.
+  async function participantDisplayName(userId: string): Promise<string> {
     const profile = await deps.profiles.findByUserId(userId);
+    if (profile?.role === 'professional') return professionalPublicName(profile.data as unknown as ProfessionalOnboarding);
     const data = profile?.data as { name?: string; ownerName?: string } | undefined;
     return data?.ownerName ?? data?.name ?? (await deps.users.findById(userId))?.name ?? '';
   }
@@ -571,7 +814,7 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
   // Tell the other person on a request what just happened.
   async function notify(request: RequestRecord, to: string, actor: string, type: NotificationType) {
     const need = await deps.needs.findById(request.needId);
-    await deps.notifications.create({ userId: to, type, requestId: request.id, actorName: await displayName(actor), needTitle: need?.title ?? '' });
+    await deps.notifications.create({ userId: to, type, requestId: request.id, actorName: await participantDisplayName(actor), needTitle: need?.title ?? '' });
   }
 
   // The person's notifications, newest first, with how many are unread.
@@ -609,7 +852,9 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     const pool = await matchablePool();
     if (!pool.some((p) => p.userId === body.data.professionalId)) return reply.code(404).send({ error: 'professional_not_found' });
     if (await deps.requests.findActive(need.id, body.data.professionalId)) return reply.code(409).send({ error: 'request_exists' });
-    const created = await deps.requests.create({ needId: need.id, ownerId: user.id, professionalId: body.data.professionalId, note: body.data.note });
+    let created;
+    try { created = await deps.requests.create({ needId: need.id, ownerId: user.id, professionalId: body.data.professionalId, note: body.data.note }); }
+    catch (error) { if (error instanceof ActiveRequestExistsError) return reply.code(409).send({ error: 'request_exists' }); throw error; }
     await notify(created, created.professionalId, user.id, 'request_received');
     return reply.code(201).send(await requestView(created, 'owner'));
   });
@@ -621,6 +866,79 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     if (!user.role) return reply.code(403).send({ error: 'role_not_set' });
     const list = user.role === 'owner' ? await deps.requests.listByOwner(user.id) : await deps.requests.listByProfessional(user.id);
     return { requests: await Promise.all(list.map((r) => requestView(r, user.role!))) };
+  });
+
+  // Conversations are available to both roles only after their consultation request is accepted.
+  app.get('/me/conversations', async (req, reply) => {
+    const user = await requireUser(req.headers.authorization, reply);
+    if (!user) return reply;
+    if (!user.role) return reply.code(403).send({ error: 'role_not_set' });
+    const all = user.role === 'owner' ? await deps.requests.listByOwner(user.id) : await deps.requests.listByProfessional(user.id);
+    const eligible = all.filter((item) => item.status === 'accepted' || item.status === 'completed').slice(0, 50);
+    const ids = eligible.map((item) => item.id);
+    const [latest, unread] = await Promise.all([
+      deps.messages.latestForRequests(ids),
+      deps.messages.countUnread(ids, user.id),
+    ]);
+    return {
+      conversations: await Promise.all(eligible.map(async (item) => {
+        const message = latest.get(item.id);
+        return {
+          request: await requestView(item, user.role!),
+          latestMessage: message ? { id: message.id, body: message.body, senderId: message.senderId, createdAt: message.createdAt, readAt: message.readAt } : null,
+          unread: unread.get(item.id) ?? 0,
+        };
+      })),
+    };
+  });
+
+  // Only the two request participants can open the thread; reading it syncs recipient read state.
+  app.get('/me/requests/:requestId/messages', async (req, reply) => {
+    const user = await requireUser(req.headers.authorization, reply);
+    if (!user) return reply;
+    const { requestId } = req.params as { requestId: string };
+    const request = await deps.requests.findById(requestId);
+    const isOwner = request?.ownerId === user.id && user.role === 'owner';
+    const isProfessional = request?.professionalId === user.id && user.role === 'professional';
+    if (!request || (!isOwner && !isProfessional)) return reply.code(404).send({ error: 'conversation_not_found' });
+    if (request.status !== 'accepted' && request.status !== 'completed') return reply.code(409).send({ error: 'conversation_not_open' });
+    await deps.messages.markRead(request.id, user.id);
+    const [messages, view] = await Promise.all([deps.messages.listForRequest(request.id), requestView(request, user.role!)]);
+    return {
+      request: view,
+      messages: messages.map((message) => ({
+        id: message.id,
+        body: message.body,
+        senderId: message.senderId,
+        createdAt: message.createdAt,
+        readAt: message.readAt,
+      })),
+    };
+  });
+
+  // Text messages stay private to the participants and are allowed on accepted/completed requests.
+  app.post('/me/requests/:requestId/messages', async (req, reply) => {
+    const user = await requireUser(req.headers.authorization, reply);
+    if (!user) return reply;
+    const body = messageBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'invalid_message' });
+    if (hasContactInformation(body.data.body)) return reply.code(400).send({ error: 'contact_info_not_allowed' });
+    const { requestId } = req.params as { requestId: string };
+    const request = await deps.requests.findById(requestId);
+    const isOwner = request?.ownerId === user.id && user.role === 'owner';
+    const isProfessional = request?.professionalId === user.id && user.role === 'professional';
+    if (!request || (!isOwner && !isProfessional)) return reply.code(404).send({ error: 'conversation_not_found' });
+    if (request.status !== 'accepted' && request.status !== 'completed') return reply.code(409).send({ error: 'conversation_not_open' });
+    const recipientId = isOwner ? request.professionalId : request.ownerId;
+    const message = await deps.messages.create({ requestId: request.id, senderId: user.id, recipientId, body: body.data.body });
+    await notify(request, recipientId, user.id, 'message_received');
+    return reply.code(201).send({
+      id: message.id,
+      body: message.body,
+      senderId: message.senderId,
+      createdAt: message.createdAt,
+      readAt: message.readAt,
+    });
   });
 
   // Accept, decline or cancel a request. The shared state machine decides what is allowed for this person.
@@ -640,7 +958,8 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
       const status = result.code === REQUEST_ERROR_CODES.forbidden ? 403 : 409;
       return reply.code(status).send({ error: result.code });
     }
-    const updated = await deps.requests.setStatus(request.id, result.status);
+    const updated = await deps.requests.setStatus(request.id, result.status, undefined, request.status);
+    if (!updated) return reply.code(409).send({ error: 'request_changed' });
     // The other person on the request hears about it.
     const other = user.id === request.ownerId ? request.professionalId : request.ownerId;
     const type: NotificationType =
@@ -665,7 +984,33 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     const startsAt = new Date(body.data.startsAt);
     const now = Date.now();
     if (startsAt.getTime() <= now || startsAt.getTime() > now + 90 * 24 * 3600 * 1000) return reply.code(400).send({ error: 'invalid_time' });
-    const updated = await deps.requests.setSchedule(request.id, startsAt);
+    const proProfile = await deps.profiles.findByUserId(request.professionalId);
+    const professional = proProfile?.data as unknown as ProfessionalOnboarding | undefined;
+    if (!professional?.timezone || !professional.durationMinutes || !professional.availabilityWindows?.length) {
+      return reply.code(409).send({ error: 'availability_not_configured' });
+    }
+    if (!isWithinAvailability(startsAt, professional.timezone, professional.durationMinutes, professional.availabilityWindows)) {
+      return reply.code(400).send({ error: 'outside_availability' });
+    }
+    if (body.data.proposalId) {
+      const proposal = request.pendingSchedule;
+      if (!proposal || proposal.id !== body.data.proposalId || proposal.proposedBy === user.role || proposal.startsAt.getTime() !== startsAt.getTime()) return reply.code(409).send({ error: 'invalid_schedule_confirmation' });
+    } else if (request.scheduledAt && request.scheduledAt.getTime() !== startsAt.getTime()) {
+      const proposal = { id: randomUUID(), startsAt, durationMinutes: professional.durationMinutes, proposedBy: user.role };
+      const proposed = await deps.requests.proposeSchedule(request.id, proposal, request.scheduleRevision);
+      if (!proposed) return reply.code(409).send({ error: 'schedule_changed' });
+      await notify(request, user.id === request.ownerId ? request.professionalId : request.ownerId, user.id, 'consultation_scheduled');
+      return await requestView(proposed, user.role);
+    }
+    let updated;
+    try {
+      updated = await deps.requests.setSchedule(request.id, startsAt, request.pendingSchedule?.durationMinutes ?? professional.durationMinutes, undefined, request.scheduleRevision);
+    } catch (error) {
+      if (error instanceof SlotConflictError) return reply.code(409).send({ error: 'slot_conflict' });
+      if (error instanceof LegacyScheduleError) return reply.code(409).send({ error: 'legacy_schedule_requires_review' });
+      throw error;
+    }
+    if (!updated) return reply.code(409).send({ error: 'schedule_changed' });
     await notify(request, user.id === request.ownerId ? request.professionalId : request.ownerId, user.id, 'consultation_scheduled');
     return await requestView(updated ?? request, user.role);
   });
@@ -679,6 +1024,8 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     if (!body.success) return reply.code(400).send({ error: 'invalid_request' });
     const folder = user.role === 'professional' ? 'photos' : user.role === 'owner' ? 'logos' : null;
     if (!folder || !new RegExp(`^${user.id}/${folder}/[A-Za-z0-9-]+\\.(jpg|png|webp)$`).test(body.data.key)) return reply.code(400).send({ error: 'invalid_file' });
+    const kind = user.role === 'owner' ? 'logo' : 'photo';
+    if (!validUploadedImage(body.data.key, kind, await deps.storage.inspect(body.data.key))) return reply.code(400).send({ error: 'invalid_file' });
     const profile = await deps.profiles.findByUserId(user.id);
     if (!profile) return reply.code(409).send({ error: 'no_profile' });
     await deps.profiles.setPhotoKey(user.id, body.data.key);

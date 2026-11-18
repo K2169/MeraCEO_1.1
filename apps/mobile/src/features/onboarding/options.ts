@@ -1,5 +1,6 @@
 import {
   BUSINESS_TYPES,
+  CONSULTATION_DURATIONS,
   DAYS,
   EMPLOYMENT_TYPES,
   ENGAGEMENT_TYPES,
@@ -35,3 +36,14 @@ export const employmentOptions = () => labelled(EMPLOYMENT_TYPES, (id) => `opt.e
 export const engagementOptions = () => labelled(ENGAGEMENT_TYPES, (id) => `opt.engagement.${id}`);
 export const dayOptions = () => labelled(DAYS, (id) => `opt.day.${id}`);
 export const qualificationOptions = () => labelled(QUALIFICATIONS, (id) => `opt.qualification.${id}`);
+export const durationOptions = () => CONSULTATION_DURATIONS.map((minutes) => ({ value: String(minutes), label: t('pro.durationMinutes', { minutes }) }));
+export const timezoneOptions = () => [
+  { value: 'Asia/Kolkata', label: t('timezone.kolkata') },
+  { value: 'Asia/Dubai', label: t('timezone.dubai') },
+  { value: 'Asia/Singapore', label: t('timezone.singapore') },
+  { value: 'Europe/London', label: t('timezone.london') },
+  { value: 'Europe/Berlin', label: t('timezone.berlin') },
+  { value: 'America/New_York', label: t('timezone.newYork') },
+  { value: 'America/Los_Angeles', label: t('timezone.losAngeles') },
+  { value: 'Australia/Sydney', label: t('timezone.sydney') },
+];

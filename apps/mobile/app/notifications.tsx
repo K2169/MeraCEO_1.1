@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 
+import { Button } from '@/components/button';
 import { Icon } from '@/components/icon';
 import { EmptyState } from '@/components/empty-state';
 import { TabScreen } from '@/components/tab-screen';
@@ -26,6 +27,7 @@ const ICONS = {
   request_cancelled: 'remove-circle-outline',
   consultation_scheduled: 'calendar-outline',
   consultation_completed: 'ribbon-outline',
+  message_received: 'mail-unread-outline',
 } as const;
 
 // The notification list. Opening it marks everything as read, but the dots stay for this visit so the
@@ -35,25 +37,34 @@ export default function Notifications() {
   const { token } = useSession();
   const [items, setItems] = useState<AppNotification[] | null>(null);
 
-  useEffect(() => {
+  const [failed, setFailed] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  // Fetch failure and read acknowledgement failure have different recovery paths.
+  const reload = useCallback(async () => {
     if (!token) return;
-    api
-      .getNotifications(token)
-      .then(async (r) => {
-        setItems(r.notifications);
-        if (r.unread > 0) {
+    setFailed(false);
+    setLoading(true);
+    try {
+      const result = await api.getNotifications(token);
+      setItems(result.notifications);
+      if (result.unread > 0) {
+        try {
           await api.markNotificationsRead(token);
           setUnread(0);
-        }
-      })
-      .catch(() => setItems([]));
+        } catch { setFailed(true); }
+      }
+    } catch { setFailed(true); }
+    finally { setLoading(false); }
   }, [token]);
+  useEffect(() => { void reload(); }, [reload]);
 
   return (
     <TabScreen title={t('notif.title')} back>
-      {items === null ? (
+      {failed ? <View style={{ gap: space.md }}><Text accessibilityRole="alert" style={[type.body, { color: colors.danger }]}>{t('common.genericError')}</Text><Button label={t('common.retry')} onPress={() => void reload()} disabled={loading} /></View> : null}
+      {items === null && loading ? (
         <ActivityIndicator color={colors.primary} />
-      ) : items.length === 0 ? (
+      ) : items === null ? null : items.length === 0 && !failed ? (
         <EmptyState icon="notifications-outline" title={t('notif.emptyTitle')} body={t('notif.emptyBody')} />
       ) : (
         <View style={{ backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' }}>

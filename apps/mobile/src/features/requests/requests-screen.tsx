@@ -1,7 +1,8 @@
 import { type Href, useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
+import { Button } from '@/components/button';
 import { Icon } from '@/components/icon';
 
 import { EmptyState } from '@/components/empty-state';
@@ -26,14 +27,17 @@ export function RequestsScreen({ viewer, section }: { viewer: 'owner' | 'profess
   const { colors, space, type } = useTheme();
   const router = useRouter();
   const { token } = useSession();
-  const { requests, busyId, error, act, schedule } = useRequests();
+  const { requests, busyId, error, loadError, loading, reload, act, schedule } = useRequests();
   // Owners manage their needs here too (PRD section 07, "Manage requests": needs, request status, replies).
   const [needs, setNeeds] = useState<Need[]>([]);
-  useFocusEffect(
-    useCallback(() => {
-      if (token && viewer === 'owner') api.getNeeds(token).then((r) => setNeeds(r.needs)).catch(() => undefined);
-    }, [token, viewer]),
-  );
+  const [needsFailed, setNeedsFailed] = useState(false);
+  const reloadNeeds = useCallback(async () => {
+    if (!token || viewer !== 'owner') return;
+    setNeedsFailed(false);
+    try { setNeeds((await api.getNeeds(token)).needs); }
+    catch { setNeedsFailed(true); }
+  }, [token, viewer]);
+  useFocusEffect(useCallback(() => { void reloadNeeds(); }, [reloadNeeds]));
   const showNeeds = viewer === 'owner' && section === 'requests';
   const consultations = section === 'consultations';
   const inSection = (requests ?? []).filter((r) => (r.status === 'accepted' || r.status === 'completed') === consultations);
@@ -46,7 +50,14 @@ export function RequestsScreen({ viewer, section }: { viewer: 'owner' | 'profess
     : inSection;
 
   return (
-    <TabScreen title={consultations ? t('consultations.title') : t('requests.title')} actions={<BellButton />}>
+    <TabScreen title={consultations ? t('consultations.title') : t('requests.title')} actions={
+      <>
+        <Pressable accessibilityRole="button" accessibilityLabel={t('chat.title')} onPress={() => router.push('/messages' as Href)} hitSlop={8} style={{ width: 40, height: 40, alignItems: 'center', justifyContent: 'center' }}>
+          <Icon name="mail-outline" size={21} color={colors.primary} />
+        </Pressable>
+        <BellButton />
+      </>
+    }>
       {showNeeds ? (
         <View style={{ gap: space.md }}>
           {/* Section header: the title on the left, a small action on the right */}
@@ -57,20 +68,23 @@ export function RequestsScreen({ viewer, section }: { viewer: 'owner' | 'profess
               <Text style={[type.caption, { color: colors.primary, fontSize: 14 }]}>{t('owner.postNeed')}</Text>
             </Pressable>
           </View>
+          {needsFailed ? <View style={{ gap: space.sm }}><Text accessibilityRole="alert" style={[type.body, { color: colors.danger }]}>{t('common.genericError')}</Text><Button label={t('common.retry')} onPress={() => void reloadNeeds()} /></View> : null}
           {needs.map((need) => (
             <NeedCard key={need.id} need={need} onPress={() => router.push(`/needs/${need.id}` as Href)} />
           ))}
           <Text style={[type.heading, { color: colors.text, marginTop: space.sm }]}>{t('owner.requestsTitle')}</Text>
         </View>
       ) : null}
+      {loadError ? <View style={{ gap: space.md }}><Text accessibilityRole="alert" style={[type.body, { color: colors.danger }]}>{t('common.genericError')}</Text><Button label={t('common.retry')} onPress={() => void reload()} disabled={loading} /></View> : null}
+      {loading && !requests ? <ActivityIndicator accessibilityLabel={t('common.loading')} color={colors.primary} /> : null}
       {requests && shown.length > 0 ? (
         <View style={{ gap: space.md }}>
           {shown.map((item) => (
-            <RequestCard key={item.id} item={item} viewer={viewer} busy={busyId === item.id} onAction={(action) => act(item.id, action)} onSchedule={(iso) => schedule(item.id, iso)} />
+            <RequestCard key={item.id} item={item} viewer={viewer} busy={busyId === item.id} onAction={(action) => act(item.id, action)} onSchedule={(iso, proposalId) => schedule(item.id, iso, proposalId)} />
           ))}
           {error ? <Text style={[type.caption, { color: colors.danger }]}>{t('request.actionFailed')}</Text> : null}
         </View>
-      ) : requests ? (
+      ) : requests && !loadError ? (
         consultations ? (
           <EmptyState icon="calendar-outline" title={t('consultations.emptyTitle')} body={t('consultations.emptyBody')} />
         ) : viewer === 'owner' ? (

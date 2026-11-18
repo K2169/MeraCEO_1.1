@@ -11,12 +11,20 @@ export function useRequests() {
   const [requests, setRequests] = useState<RequestItem[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  useFocusEffect(
-    useCallback(() => {
-      if (token) api.getRequests(token).then((r) => setRequests(r.requests)).catch(() => setRequests([]));
-    }, [token]),
-  );
+  // Keep failed fetches distinct from a successful empty response.
+  const reload = useCallback(async () => {
+    if (!token) return;
+    setLoading(true);
+    setLoadError(false);
+    try { setRequests((await api.getRequests(token)).requests); }
+    catch { setLoadError(true); }
+    finally { setLoading(false); }
+  }, [token]);
+
+  useFocusEffect(useCallback(() => { void reload(); }, [reload]));
 
   // Send the action, then swap the updated request into the list.
   async function act(id: string, action: 'accept' | 'decline' | 'cancel' | 'complete') {
@@ -34,12 +42,12 @@ export function useRequests() {
   }
 
   // Set the planned start time of an accepted consultation. Returns true when it worked.
-  async function schedule(id: string, startsAt: string): Promise<boolean> {
+  async function schedule(id: string, startsAt: string, proposalId?: string): Promise<boolean> {
     if (!token) return false;
     setBusyId(id);
     setError(false);
     try {
-      const updated = await api.scheduleConsultation(token, id, startsAt);
+      const updated = await api.scheduleConsultation(token, id, startsAt, proposalId);
       setRequests((list) => (list ?? []).map((r) => (r.id === id ? updated : r)));
       return true;
     } catch {
@@ -50,5 +58,5 @@ export function useRequests() {
     }
   }
 
-  return { requests, busyId, error, act, schedule };
+  return { requests, busyId, error, loadError, loading, reload, act, schedule };
 }

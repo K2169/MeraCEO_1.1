@@ -1,14 +1,14 @@
 # MeraCEO handoff
 
-For the next engineer or agent (written 2026-11-11). Read this, then `docs/CODE-GUIDE.md` and `docs/DECISIONS.md`.
-The original task list is `~/Downloads/MeraCEO_Implementation_Plan.md` (v2). It assumes Supabase; we replaced that (see "Stack" below), so read its Postgres/RLS/RPC tasks as "do it in `apps/api`". The product spec is `MeraCEO_VIBECODED_POC/MeraCEO_PRD_V1.0.pdf`. The old POC in `MeraCEO_VIBECODED_POC/` is reference only. Do not edit or migrate it.
+For the next engineer or agent (updated 2026-11-11). Read this, then `docs/IMPLEMENTATION_PLAN.md`, `docs/CODE-GUIDE.md`, and `docs/DECISIONS.md`.
+The current product baseline is Master PRD V3. The v2 plan in `~/Downloads/MeraCEO_Implementation_Plan.md` is historical and Supabase-specific; its stack, dates, and acceptance criteria are superseded. The old POC in `MeraCEO_VIBECODED_POC/` is reference only. Do not edit or migrate it.
 
 ## Stack (decided by the owner, Salman)
 
 - Monorepo, pnpm workspaces: `apps/mobile` (Expo SDK 58, React Native 0.88, Expo Router), `apps/api` (Fastify + TypeScript + MongoDB Atlas), `packages/shared` (zod schemas, enums, matching, request state machine, used by both).
 - Google sign-in only. The app sends a Google ID token to `POST /auth/google` and gets a 7 day session JWT.
 - Files: Backblaze B2 (S3 compatible) through presigned URLs. Reads use 1 hour signed URLs, uploads 5 minute presigned PUTs.
-- No git history yet. The owner asked for no branches or commits so far. Do not commit or push unless asked.
+- Git setup: `main` and `development` contain the imported monorepo. Use feature branches and the repository's PR workflow; do not force-push `main`.
 
 ## Commands
 
@@ -82,7 +82,7 @@ Task by task status against the plan:
 
 ### D. Cleanup before release
 - Remove `apps/mobile/app/dev/components.tsx` (dev gallery; it now also holds sample match/need/request cards) before W7-01.
-- Update `README.md`: the Status section still describes Supabase and PGlite.
+- Keep the README, implementation plan, and this handoff aligned when product scope changes.
 - Remove demo data: `pnpm demo:remove`. Rotate the MongoDB password. Confirm the light colour palette with the owner. Record the matching-logic check against the POC's `src/domain/matching.ts` (plan W5-01 asks for it; weights are expertise 60 / industry 20 / budget 15 / format 5 in `packages/shared/src/matching.ts`).
 
 ## Known caveats

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createRequestSchema, ownerOnboardingSchema, professionalOnboardingSchema } from '../src';
+import { createRequestSchema, ownerOnboardingSchema, professionalOnboardingSchema, professionalRegistrationSchema } from '../src';
 
 const owner = {
   businessName: 'Sharma Traders',
@@ -80,6 +80,54 @@ describe('onboarding schemas', () => {
       false,
     );
     expect(professionalOnboardingSchema.safeParse(pro).success).toBe(true);
+  });
+
+  it('requires structured availability and validates overlapping time windows for new registrations', () => {
+    const registration = {
+      ...pro,
+      gender: 'prefer_not_to_say',
+      days: ['mon'] as const,
+      durationMinutes: 60,
+      timezone: 'Asia/Kolkata',
+      availabilityWindows: [{ id: 'mon-am', day: 'mon', startTime: '09:00', endTime: '12:00' }],
+    };
+    expect(professionalRegistrationSchema.safeParse(registration).success).toBe(true);
+    expect(professionalRegistrationSchema.safeParse({ ...registration, gender: undefined }).success).toBe(false);
+    expect(professionalRegistrationSchema.safeParse({ ...registration, gender: 'invalid' }).success).toBe(false);
+    expect(professionalRegistrationSchema.safeParse({ ...registration, timezone: 'Not/AZone' }).success).toBe(false);
+    expect(professionalRegistrationSchema.safeParse({ ...registration, availabilityWindows: [] }).success).toBe(false);
+    expect(professionalRegistrationSchema.safeParse({ ...registration, days: ['mon', 'tue'] }).success).toBe(false);
+    expect(professionalRegistrationSchema.safeParse({ ...registration, days: ['mon', 'mon'] }).success).toBe(false);
+    expect(professionalRegistrationSchema.safeParse({
+      ...registration,
+      availabilityWindows: [
+        ...registration.availabilityWindows,
+        { id: 'mon-midday', day: 'mon', startTime: '11:00', endTime: '13:00' },
+      ],
+    }).success).toBe(false);
+  });
+
+  it('requires a time zone when an existing profile supplies structured availability', () => {
+    const profile = {
+      ...pro,
+      days: ['mon', 'tue'],
+      availabilityWindows: [{ id: 'mon-am', day: 'mon', startTime: '09:00', endTime: '12:00' }],
+    };
+    expect(professionalOnboardingSchema.safeParse({ ...profile, timezone: 'Asia/Kolkata' }).success).toBe(true);
+    expect(professionalOnboardingSchema.safeParse({ ...profile, timezone: undefined }).success).toBe(false);
+    expect(professionalOnboardingSchema.safeParse({ ...pro, timezone: 'Asia/Kolkata' }).success).toBe(true);
+  });
+
+  it('validates date ranges in repeatable professional history', () => {
+    const history = {
+      ...pro,
+      employmentHistory: [{ id: 'role-1', title: 'Advisor', organization: 'Mera', startDate: '2020-01', endDate: '2021-01', current: false }],
+    };
+    expect(professionalOnboardingSchema.safeParse(history).success).toBe(true);
+    expect(professionalOnboardingSchema.safeParse({
+      ...history,
+      employmentHistory: [{ ...history.employmentHistory[0], endDate: '2019-12' }],
+    }).success).toBe(false);
   });
 });
 

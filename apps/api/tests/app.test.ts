@@ -1,5 +1,6 @@
 import type { OAuth2Client, TokenPayload } from 'google-auth-library';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { datesWithAvailability, slotsForDate, zonedTimeToIso } from '@meraceo/shared';
 
 import { buildApp } from '../src/app.js';
 import { createGoogleVerifier } from '../src/auth/google.js';
@@ -9,6 +10,8 @@ import { InMemoryProfileRepository } from '../src/profiles/repository.js';
 import { InMemoryNotificationRepository } from '../src/notifications/repository.js';
 import { InMemorySavedRepository } from '../src/saved/repository.js';
 import { InMemoryRequestRepository } from '../src/requests/repository.js';
+import { InMemoryGrievanceRepository } from '../src/grievances/repository.js';
+import { InMemoryMessageRepository } from '../src/messages/repository.js';
 import { InMemoryNeedRepository } from '../src/needs/repository.js';
 import { buildUploadKey, UPLOAD_KINDS } from '../src/storage/presign.js';
 import type { Storage } from '../src/storage/storage.js';
@@ -29,6 +32,11 @@ function googleClient(payload: Partial<TokenPayload>): OAuth2Client {
 // A pretend file store for tests: it hands out fake links and remembers what was deleted.
 class FakeStorage implements Storage {
   removed: string[] = [];
+  async inspect(key: string) {
+    const extension = key.split('.').pop()?.toLowerCase();
+    const contentType = extension === 'jpg' ? 'image/jpeg' : extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : '';
+    return contentType ? { contentType, contentLength: 1024 } : null;
+  }
   async createUploadUrl(req: { userId: string; kind: keyof typeof UPLOAD_KINDS; contentType: string }) {
     const key = buildUploadKey(req, 'abc-123');
     return key ? { uploadUrl: `https://files.test/upload/${key}`, key, expiresIn: 300 } : null;
@@ -59,10 +67,12 @@ function makeApp() {
   const needs = new InMemoryNeedRepository();
   const storage = new FakeStorage();
   const requests = new InMemoryRequestRepository();
+  const messages = new InMemoryMessageRepository();
   const notifications = new InMemoryNotificationRepository();
   const saved = new InMemorySavedRepository();
   const app = buildApp(
     {
+      grievances: new InMemoryGrievanceRepository(),
       sessionSecret: SECRET,
       verifyGoogle: createGoogleVerifier(['123-web.apps.googleusercontent.com'], googleClient(payload)),
       users,
@@ -70,13 +80,14 @@ function makeApp() {
       profiles,
       needs,
       requests,
+      messages,
       notifications,
       saved,
       storage,
     },
     { logger: false },
   );
-  return { app, users, consents, profiles, requests, saved, storage };
+  return { app, users, consents, profiles, requests, messages, saved, storage };
 }
 
 async function signIn(app: ReturnType<typeof makeApp>['app']) {
@@ -97,19 +108,66 @@ describe('API routes', () => {
     await ctx.app.close();
   });
 
+  it('support reports require authentication, participant access and retry safely', async () => {
+    expect((await ctx.app.inject({ method: 'GET', url: '/support' })).json().email).toBe('krishnam@meraceo.com');
+    const input = { category: 'technical', message: 'The request page does not load.', idempotencyKey: 'report-retry-123' };
+    expect((await ctx.app.inject({ method: 'POST', url: '/me/grievances', payload: input })).statusCode).toBe(401);
+    const { sessionToken } = await signIn(ctx.app);
+    const send = (body: Record<string, string>) => ctx.app.inject({ method: 'POST', url: '/me/grievances', headers: bearer(sessionToken), payload: body });
+    const first = await send(input);
+    expect(first.statusCode).toBe(201);
+    expect((await send(input)).json().id).toBe(first.json().id);
+    expect((await send({ ...input, requestId: 'someone-elses-request' })).statusCode).toBe(404);
+    expect((await send({ ...input, message: 'x'.repeat(501) })).statusCode).toBe(400);
+  });
+
   it('GET /health answers without auth', async () => {
     const res = await ctx.app.inject({ method: 'GET', url: '/health' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
   });
 
-  it('POST /auth/google returns a session and never the email', async () => {
+  it('POST /auth/google returns a session and the signed-in account email', async () => {
     const res = await ctx.app.inject({ method: 'POST', url: '/auth/google', payload: { idToken: GOOD_TOKEN } });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.sessionToken).toEqual(expect.any(String));
-    expect(body.user).toEqual({ id: expect.any(String), name: 'Test Person', role: null, ageConfirmed: null, dateOfBirthSet: false, profileComplete: false, moderation: null, photoUrl: null, consentDone: false });
-    expect(JSON.stringify(body)).not.toContain('person@example.com');
+    expect(body.user).toEqual({ id: expect.any(String), name: 'Test Person', email: 'person@example.com', role: null, ageConfirmed: null, dateOfBirthSet: false, profileComplete: false, moderation: null, photoUrl: null, consentDone: false });
+  });
+
+  it('sets password only for the verified signed-in Google email and keeps the hash private', async () => {
+    const session = await signIn(ctx.app);
+    const password = 'SufficientlyLong123!';
+    const short = await ctx.app.inject({ method: 'PUT', url: '/me/password', headers: bearer(session.sessionToken), payload: { password: 'short' } });
+    expect(short.statusCode).toBe(400);
+    const set = await ctx.app.inject({ method: 'PUT', url: '/me/password', headers: bearer(session.sessionToken), payload: { password } });
+    expect(set.statusCode).toBe(200);
+    expect(set.json()).toEqual({ saved: true });
+    const me = await ctx.app.inject({ method: 'GET', url: '/me', headers: bearer(session.sessionToken) });
+    const exported = await ctx.app.inject({ method: 'GET', url: '/me/export', headers: bearer(session.sessionToken) });
+    expect(JSON.stringify(me.json())).not.toMatch(/passwordHash|passwordEmail|emailVerified|scrypt-v1/i);
+    expect(JSON.stringify(exported.json())).not.toMatch(/passwordHash|passwordEmail|scrypt-v1/i);
+    const login = await ctx.app.inject({ method: 'POST', url: '/auth/password', payload: { identifier: 'PERSON@example.com', password } });
+    expect(login.statusCode).toBe(200);
+    expect(login.json().user).toMatchObject({ id: session.user.id, email: 'person@example.com' });
+    const invalid = await ctx.app.inject({ method: 'POST', url: '/auth/password', payload: { identifier: 'person@example.com', password: 'incorrect' } });
+    expect(invalid.statusCode).toBe(401);
+    expect(invalid.json()).toEqual({ error: 'invalid_credentials' });
+  });
+
+  it('bounds repeated password login and setup attempts', async () => {
+    for (let i = 0; i < 10; i += 1) {
+      const failed = await ctx.app.inject({ method: 'POST', url: '/auth/password', payload: { identifier: 'x', password: '' } });
+      expect(failed.statusCode).toBe(401);
+    }
+    expect((await ctx.app.inject({ method: 'POST', url: '/auth/password', payload: { identifier: 'x', password: '' } })).statusCode).toBe(429);
+
+    const session = await signIn(ctx.app);
+    for (let i = 0; i < 10; i += 1) {
+      const failed = await ctx.app.inject({ method: 'PUT', url: '/me/password', headers: bearer(session.sessionToken), payload: { password: 'short' } });
+      expect(failed.statusCode).toBe(400);
+    }
+    expect((await ctx.app.inject({ method: 'PUT', url: '/me/password', headers: bearer(session.sessionToken), payload: { password: 'short' } })).statusCode).toBe(429);
   });
 
   it('POST /auth/google rejects an invalid Google token with 401', async () => {
@@ -137,7 +195,7 @@ describe('API routes', () => {
     const { sessionToken, user } = await signIn(ctx.app);
     const res = await ctx.app.inject({ method: 'GET', url: '/me', headers: bearer(sessionToken) });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ id: user.id, name: 'Test Person', role: null, ageConfirmed: null, dateOfBirthSet: false, profileComplete: false, moderation: null, photoUrl: null, consentDone: false });
+    expect(res.json()).toEqual({ id: user.id, name: 'Test Person', email: 'person@example.com', role: null, ageConfirmed: null, dateOfBirthSet: false, profileComplete: false, moderation: null, photoUrl: null, consentDone: false });
   });
 
   it('POST /me/role is refused until the age check is passed', async () => {
@@ -248,13 +306,54 @@ describe('API routes', () => {
     expect(stored.every((e) => e.noticeVersion === 'draft-1')).toBe(true);
   });
 
+  it('POST /me/consents deduplicates onboarding retries with the same idempotency key', async () => {
+    const { sessionToken, user } = await signIn(ctx.app);
+    await ctx.app.inject({ method: 'POST', url: '/me/age', headers: bearer(sessionToken), payload: { dateOfBirth: '2000-01-02' } });
+    const payload = {
+      idempotencyKey: 'onboarding-submission-12345',
+      consents: [
+        { type: 'terms', granted: true },
+        { type: 'matching', granted: false },
+        { type: 'contact_sharing', granted: false },
+        { type: 'notifications', granted: false },
+      ],
+    };
+    const first = await ctx.app.inject({ method: 'POST', url: '/me/consents', headers: bearer(sessionToken), payload });
+    const retry = await ctx.app.inject({ method: 'POST', url: '/me/consents', headers: bearer(sessionToken), payload });
+
+    expect(first.statusCode).toBe(200);
+    expect(retry.statusCode).toBe(200);
+    expect((await ctx.consents.listForUser(user.id))).toHaveLength(4);
+
+    const changedChoice = await ctx.app.inject({
+      method: 'POST',
+      url: '/me/consents',
+      headers: bearer(sessionToken),
+      payload: { idempotencyKey: 'onboarding-submission-67890', consents: [{ type: 'matching', granted: true }] },
+    });
+    expect(changedChoice.statusCode).toBe(200);
+    expect((await ctx.consents.listForUser(user.id))).toHaveLength(5);
+  });
+
+  it('POST /me/consents rejects duplicate choice types in one request', async () => {
+    const { sessionToken } = await signIn(ctx.app);
+    await ctx.app.inject({ method: 'POST', url: '/me/age', headers: bearer(sessionToken), payload: { dateOfBirth: '2000-01-02' } });
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/me/consents',
+      headers: bearer(sessionToken),
+      payload: { consents: [{ type: 'terms', granted: true }, { type: 'terms', granted: true }] },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('POST /uploads/presign returns a URL inside the caller folder', async () => {
     const { sessionToken, user } = await signIn(ctx.app);
     const res = await ctx.app.inject({
       method: 'POST',
       url: '/uploads/presign',
       headers: bearer(sessionToken),
-      payload: { kind: 'logo', contentType: 'image/webp' },
+      payload: { kind: 'logo', contentType: 'image/png' },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
@@ -290,6 +389,7 @@ describe('API routes', () => {
   }
 
   const ownerProfile = {
+    gender: 'prefer_not_to_say',
     businessName: 'Sharma Textiles',
     industry: 'retail',
     country: 'India',
@@ -305,7 +405,10 @@ describe('API routes', () => {
     yearsInBusiness: 12,
     needTitle: 'Plan our first export order',
     challenge: 'We want to sell fabric abroad but do not know the paperwork or pricing.',
+    needTimeline: 'Within the next 6 months',
+    goals: 'Reach the first overseas distributor with a profitable order.',
     needExpertise: ['international'],
+    supportBudgets: [{ expertise: 'international', budget: '5000_25000' }],
     budgetBand: 'low',
   };
 
@@ -373,7 +476,10 @@ describe('API routes', () => {
   });
 
   const proProfile = {
+    gender: 'prefer_not_to_say',
     name: 'Ravi Menon',
+    displayName: 'Ravi Menon',
+    discreetMode: false,
     country: 'India',
     state: 'Karnataka',
     city: 'Bengaluru',
@@ -385,7 +491,16 @@ describe('API routes', () => {
     qualification: 'mba',
     skills: ['E-commerce', 'Retail growth'],
     engagementType: 'both',
-    days: ['mon', 'tue', 'wed'],
+    days: ['mon'],
+    durationMinutes: 60,
+    availabilityWindows: [{ id: 'mon-day', day: 'mon', startTime: '09:00', endTime: '17:00' }],
+    timezone: 'Asia/Kolkata',
+    industriesAdvised: ['it_services'],
+    preferredTeamSizes: ['11_50'],
+    preferredRevenueBands: ['1_10_cr'],
+    employmentHistory: [{ id: 'role-1', title: 'Consultant', organization: 'Retail Growth Co', startDate: '2018-01', endDate: '2022-12', current: false }],
+    educationHistory: [{ id: 'edu-1', qualification: 'mba', institution: 'Pune University', fieldOfStudy: 'Marketing', completionYear: '2012' }],
+    certifications: [{ id: 'cert-1', name: 'Digital Marketing', issuer: 'Institute', issueYear: '2020' }],
     experience: 'Ten years of growing retail brands through marketing and sales.',
     expertise: ['marketing', 'sales'],
     industry: 'retail',
@@ -395,13 +510,25 @@ describe('API routes', () => {
     termsAccepted: true,
   };
 
+  it('requires structured availability for a new professional profile', async () => {
+    const token = await signInWithRole('professional');
+    const res = await ctx.app.inject({
+      method: 'PUT',
+      url: '/me/profile',
+      headers: bearer(token),
+      payload: { ...proProfile, availabilityWindows: undefined },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'invalid_profile' });
+  });
+
   it('saving an owner profile creates the first need once', async () => {
     const token = await signInWithRole('owner');
     await ctx.app.inject({ method: 'PUT', url: '/me/profile', headers: bearer(token), payload: ownerProfile });
     await ctx.app.inject({ method: 'PUT', url: '/me/profile', headers: bearer(token), payload: ownerProfile });
     const res = await ctx.app.inject({ method: 'GET', url: '/me/needs', headers: bearer(token) });
     expect(res.json().needs).toHaveLength(1);
-    expect(res.json().needs[0]).toMatchObject({ title: 'Plan our first export order', status: 'open' });
+    expect(res.json().needs[0]).toMatchObject({ title: 'Plan our first export order', timeline: 'Within the next 6 months', status: 'open' });
   });
 
   it('POST /me/needs adds a need for owners only and rejects a bad form', async () => {
@@ -410,7 +537,7 @@ describe('API routes', () => {
       method: 'POST',
       url: '/me/needs',
       headers: bearer(owner),
-      payload: { title: 'Grow online sales', challenge: 'We sell in one shop and want an online store.', expertise: ['marketing'], industry: 'retail', budgetBand: 'mid' },
+      payload: { title: 'Grow online sales', challenge: 'We sell in one shop and want an online store.', timeline: 'Within 3 months', expertise: ['marketing'], industry: 'retail', budgetBand: 'mid' },
     });
     expect(ok.statusCode).toBe(201);
     const bad = await ctx.app.inject({ method: 'POST', url: '/me/needs', headers: bearer(owner), payload: { title: 'x' } });
@@ -431,10 +558,10 @@ describe('API routes', () => {
     await ctx.users.setRoleOnce(ownerUser.id, 'owner');
     const ownerToken = await issueSessionToken(ownerUser.id, SECRET);
     await ctx.app.inject({
-      method: 'POST',
-      url: '/me/needs',
+      method: 'PUT',
+      url: '/me/profile',
       headers: bearer(ownerToken),
-      payload: { title: 'Grow online sales', challenge: 'We sell in one shop and want an online store.', expertise: ['marketing', 'sales'], industry: 'retail', budgetBand: 'mid', format: 'online' },
+      payload: { ...ownerProfile, needTitle: 'Grow online sales', challenge: 'We sell in one shop and want an online store.', needExpertise: ['marketing', 'sales'], supportBudgets: [{ expertise: 'marketing', budget: '5000_25000' }, { expertise: 'sales', budget: '5000_25000' }], preferredFormat: 'online' },
     });
     const needId = (await ctx.app.inject({ method: 'GET', url: '/me/needs', headers: bearer(ownerToken) })).json().needs[0].id;
 
@@ -445,7 +572,7 @@ describe('API routes', () => {
     const after = await ctx.app.inject({ method: 'GET', url: `/me/needs/${needId}/matches`, headers: bearer(ownerToken) });
     expect(after.statusCode).toBe(200);
     const [match] = after.json().matches;
-    expect(match).toMatchObject({ id: proUser.id, name: 'Ravi Menon', score: 100, reasons: ['expertise', 'industry', 'budget', 'format'] });
+    expect(match).toMatchObject({ id: proUser.id, name: 'Ravi Menon', score: 100, reasons: ['expertise', 'industry', 'budget', 'format', 'business_profile'] });
     expect(JSON.stringify(after.json())).not.toMatch(/example\.com/);
 
     // Another owner cannot read this need's matches.
@@ -471,7 +598,7 @@ describe('API routes', () => {
     await ctx.app.inject({ method: 'PUT', url: '/me/profile', headers: bearer(pro.token), payload: proProfile });
     ctx.profiles.approve(pro.id);
     const owner = await makeUser('owner-1', 'owner');
-    await ctx.app.inject({ method: 'PUT', url: '/me/profile', headers: bearer(owner.token), payload: { ...ownerProfile, needExpertise: ['marketing'] } });
+    await ctx.app.inject({ method: 'PUT', url: '/me/profile', headers: bearer(owner.token), payload: { ...ownerProfile, needExpertise: ['marketing'], supportBudgets: [{ expertise: 'marketing', budget: '5000_25000' }] } });
     const needId = (await ctx.app.inject({ method: 'GET', url: '/me/needs', headers: bearer(owner.token) })).json().needs[0].id as string;
     return { pro, owner, needId };
   }
@@ -487,13 +614,27 @@ describe('API routes', () => {
 
     const ownerList = (await ctx.app.inject({ method: 'GET', url: '/me/requests', headers: bearer(owner.token) })).json().requests;
     expect(ownerList).toHaveLength(1);
+    expect(ownerList[0].consultation).toMatchObject({ durationMinutes: 60, timezone: 'Asia/Kolkata' });
     const proList = (await ctx.app.inject({ method: 'GET', url: '/me/requests', headers: bearer(pro.token) })).json();
-    expect(proList.requests[0]).toMatchObject({ note: 'Can we talk this week?', owner: { businessName: 'Sharma Textiles' }, need: { title: 'Plan our first export order' } });
+    expect(proList.requests[0]).toMatchObject({
+      note: 'Can we talk this week?',
+      owner: { businessName: 'Sharma Textiles' },
+      need: { title: 'Plan our first export order' },
+      consultation: { durationMinutes: 60, timezone: 'Asia/Kolkata', availabilityWindows: [{ day: 'mon', startTime: '09:00', endTime: '17:00' }] },
+    });
     expect(JSON.stringify(proList)).not.toMatch(/example\.com/);
 
     // The matches list now shows the request status.
     const matches = (await ctx.app.inject({ method: 'GET', url: `/me/needs/${needId}/matches`, headers: bearer(owner.token) })).json().matches;
     expect(matches[0].requestStatus).toBe('pending');
+  });
+
+  it('concurrent request retries produce one active request', async () => {
+    const { pro, owner, needId } = await requestSetup();
+    const send = () => ctx.app.inject({ method: 'POST', url: '/me/requests', headers: bearer(owner.token), payload: { needId, professionalId: pro.id } });
+    const results = await Promise.all([send(), send()]);
+    expect(results.map((result) => result.statusCode).sort()).toEqual([201, 409]);
+    expect(await ctx.requests.listByOwner(owner.id)).toHaveLength(1);
   });
 
   it('only owners can send, and only to approved professionals about their own open needs', async () => {
@@ -525,6 +666,40 @@ describe('API routes', () => {
     expect((await ctx.app.inject({ method: 'POST', url, headers: bearer(pro.token), payload: { action: 'decline' } })).statusCode).toBe(409);
     const cancelled = await ctx.app.inject({ method: 'POST', url, headers: bearer(owner.token), payload: { action: 'cancel' } });
     expect(cancelled.json().status).toBe('cancelled');
+  });
+
+  it('participants can exchange messages on an accepted request and unread state clears on read', async () => {
+    const owner = await makeUser('chat-owner', 'owner');
+    const pro = await makeUser('chat-professional', 'professional');
+    const request = await ctx.requests.create({ needId: 'demo-need', ownerId: owner.id, professionalId: pro.id });
+    await ctx.requests.setStatus(request.id, 'accepted');
+    const requestId = request.id;
+    const threadUrl = `/me/requests/${requestId}/messages`;
+
+    expect((await ctx.app.inject({ method: 'GET', url: '/me/conversations', headers: bearer(owner.token) })).json().conversations).toHaveLength(1);
+    const first = await ctx.app.inject({ method: 'POST', url: threadUrl, headers: bearer(owner.token), payload: { body: '  Hello Ravi, can we discuss the export plan?  ' } });
+    expect(first.statusCode).toBe(201);
+    expect(first.json()).toMatchObject({ body: 'Hello Ravi, can we discuss the export plan?', senderId: owner.id, readAt: null });
+
+    const proList = await ctx.app.inject({ method: 'GET', url: '/me/conversations', headers: bearer(pro.token) });
+    expect(proList.json().conversations[0]).toMatchObject({ unread: 1, latestMessage: { body: 'Hello Ravi, can we discuss the export plan?' } });
+    const outsider = await makeUser('pro-unauthorized', 'professional');
+    expect((await ctx.app.inject({ method: 'GET', url: threadUrl, headers: bearer(outsider.token) })).statusCode).toBe(404);
+
+    const proThread = await ctx.app.inject({ method: 'GET', url: threadUrl, headers: bearer(pro.token) });
+    expect(proThread.statusCode).toBe(200);
+    expect(proThread.json().messages[0].readAt).not.toBeNull();
+    const reply = await ctx.app.inject({ method: 'POST', url: threadUrl, headers: bearer(pro.token), payload: { body: 'Yes, happy to help. Please share your priorities.' } });
+    expect(reply.statusCode).toBe(201);
+    const ownerList = await ctx.app.inject({ method: 'GET', url: '/me/conversations', headers: bearer(owner.token) });
+    expect(ownerList.json().conversations[0]).toMatchObject({ unread: 1, latestMessage: { senderId: pro.id } });
+    expect((await ctx.app.inject({ method: 'POST', url: threadUrl, headers: bearer(owner.token), payload: { body: '   ' } })).statusCode).toBe(400);
+    for (const blocked of ['My phone is 9876543210', 'one two three four five', 'write me at ravi@example.com', 'my handle is @ravi']) {
+      const rejected = await ctx.app.inject({ method: 'POST', url: threadUrl, headers: bearer(owner.token), payload: { body: blocked } });
+      expect(rejected.statusCode).toBe(400);
+      expect(rejected.json()).toEqual({ error: 'contact_info_not_allowed' });
+    }
+    expect(await ctx.messages.listForRequest(requestId)).toHaveLength(2);
   });
 
   it('a declined request lets the owner send a fresh one', async () => {
@@ -613,6 +788,61 @@ describe('API routes', () => {
     expect((await ctx.app.inject({ method: 'GET', url: '/me/opportunities', headers: bearer(owner.token) })).statusCode).toBe(403);
   });
 
+  it('GET /me/opportunities/:needId returns safe P8 details only to an eligible professional for an open need', async () => {
+    const { pro, owner, needId } = await requestSetup();
+    const url = `/me/opportunities/${needId}`;
+    const detail = await ctx.app.inject({ method: 'GET', url, headers: bearer(pro.token) });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().opportunity).toMatchObject({
+      id: needId,
+      title: 'Plan our first export order',
+      timeline: 'Within the next 6 months',
+      business: { name: 'Sharma Textiles', industry: 'retail', city: 'Surat', teamSize: '11_50' },
+      score: expect.any(Number),
+      reasons: expect.any(Array),
+    });
+    expect(JSON.stringify(detail.json())).not.toMatch(/Asha Sharma|phone|linkedin|example\.com|DOB/i);
+    expect((await ctx.app.inject({ method: 'GET', url, headers: bearer(owner.token) })).statusCode).toBe(403);
+    expect((await ctx.app.inject({ method: 'GET', url })).statusCode).toBe(401);
+
+    const unmatched = await makeUser('unmatched-pro', 'professional');
+    await ctx.app.inject({ method: 'PUT', url: '/me/profile', headers: bearer(unmatched.token), payload: { ...proProfile, expertise: ['legal'], industriesAdvised: [] } });
+    expect((await ctx.app.inject({ method: 'GET', url, headers: bearer(unmatched.token) })).statusCode).toBe(404);
+
+    await ctx.app.inject({ method: 'POST', url: `/me/needs/${needId}/close`, headers: bearer(owner.token), payload: {} });
+    expect((await ctx.app.inject({ method: 'GET', url, headers: bearer(pro.token) })).statusCode).toBe(404);
+  });
+
+  it('owners can retrieve, update, and close only their own open needs', async () => {
+    const { pro, owner, needId } = await requestSetup();
+    const url = `/me/needs/${needId}`;
+    const own = await ctx.app.inject({ method: 'GET', url, headers: bearer(owner.token) });
+    expect(own.statusCode).toBe(200);
+    expect(own.json()).toMatchObject({ id: needId, timeline: 'Within the next 6 months' });
+    expect((await ctx.app.inject({ method: 'GET', url, headers: bearer(pro.token) })).statusCode).toBe(403);
+    expect((await ctx.app.inject({ method: 'GET', url })).statusCode).toBe(401);
+
+    const update = await ctx.app.inject({
+      method: 'PUT',
+      url,
+      headers: bearer(owner.token),
+      payload: { title: 'Plan our export launch', challenge: 'We need help planning the first fabric export.', timeline: 'Within 3 months', goals: 'Reach the first overseas distributor.', expertise: ['international'], industry: 'retail', budgetBand: 'mid' },
+    });
+    expect(update.statusCode).toBe(200);
+    expect(update.json()).toMatchObject({ title: 'Plan our export launch', timeline: 'Within 3 months' });
+    expect((await ctx.app.inject({ method: 'PUT', url, headers: bearer(owner.token), payload: { title: 'x' } })).statusCode).toBe(400);
+
+    const other = await makeUser('other-need-owner', 'owner');
+    expect((await ctx.app.inject({ method: 'GET', url, headers: bearer(other.token) })).statusCode).toBe(404);
+    expect((await ctx.app.inject({ method: 'PUT', url, headers: bearer(other.token), payload: update.json() })).statusCode).toBe(404);
+
+    const close = await ctx.app.inject({ method: 'POST', url: `${url}/close`, headers: bearer(owner.token), payload: {} });
+    expect(close.statusCode).toBe(200);
+    expect(close.json()).toMatchObject({ id: needId, status: 'closed' });
+    expect((await ctx.app.inject({ method: 'PUT', url, headers: bearer(owner.token), payload: update.json() })).statusCode).toBe(404);
+    expect((await ctx.app.inject({ method: 'POST', url: `${url}/close`, headers: bearer(other.token), payload: {} })).statusCode).toBe(404);
+  });
+
   it('GET /me/professionals searches, filters and ranks, and lists people who do not fit below those who do', async () => {
     const { pro, owner } = await requestSetup();
     const get = async (qs: string) => (await ctx.app.inject({ method: 'GET', url: `/me/professionals${qs}`, headers: bearer(owner.token) })).json().professionals as { name: string; score: number }[];
@@ -623,7 +853,9 @@ describe('API routes', () => {
     expect(await get('?q=nobody')).toHaveLength(0);
     expect(await get('?expertise=legal')).toHaveLength(0);
     expect(await get('?industry=retail&format=online')).toHaveLength(1);
+    expect(await get('?industry=it_services')).toHaveLength(1);
     expect(await get('?format=phone')).toHaveLength(0);
+    expect(await get('?availability=configured')).toHaveLength(1);
 
     // A second professional with no matching expertise still shows, after the good fit.
     const other = await makeUser('pro-3', 'professional');
@@ -642,6 +874,15 @@ describe('API routes', () => {
     const res = await ctx.app.inject({ method: 'GET', url: `/me/professionals/${pro.id}`, headers: bearer(owner.token) });
     expect(res.statusCode).toBe(200);
     expect(res.json().professional).toMatchObject({ id: pro.id, name: 'Ravi Menon' });
+    expect(res.json().professional).toMatchObject({
+      durationMinutes: 60,
+      industriesAdvised: ['it_services'],
+      timezone: 'Asia/Kolkata',
+      availabilityWindows: [{ day: 'mon', startTime: '09:00', endTime: '17:00' }],
+      employmentHistory: [{ id: 'role-1', title: 'Consultant', organization: 'Retail Growth Co', startDate: '2018-01', endDate: '2022-12', current: false }],
+      educationHistory: [{ id: 'edu-1', qualification: 'mba', institution: 'Pune University', fieldOfStudy: 'Marketing', completionYear: '2012' }],
+      certifications: [{ id: 'cert-1', name: 'Digital Marketing', issuer: 'Institute', issueYear: '2020' }],
+    });
     expect(Array.isArray(res.json().needs)).toBe(true);
     expect(JSON.stringify(res.json())).not.toMatch(/phone|linkedin|example\.com/i);
 
@@ -707,7 +948,10 @@ describe('API routes', () => {
     const { pro, owner, needId } = await requestSetup();
     const id = (await ctx.app.inject({ method: 'POST', url: '/me/requests', headers: bearer(owner.token), payload: { needId, professionalId: pro.id } })).json().id as string;
     const schedule = (token: string, startsAt: string) => ctx.app.inject({ method: 'POST', url: `/me/requests/${id}/schedule`, headers: bearer(token), payload: { startsAt } });
-    const inTwoDays = new Date(Date.now() + 2 * 24 * 3600 * 1000).toISOString();
+    const windows = [{ day: 'mon' as const, startTime: '09:00', endTime: '17:00' }];
+    const dateKey = datesWithAvailability(new Date(), 'Asia/Kolkata', 60, windows, 90)[0]!;
+    const inTwoDays = slotsForDate(dateKey, 'Asia/Kolkata', 60, windows)[0]!.startsAt;
+    const outsideAvailability = zonedTimeToIso(dateKey, '18:00', 'Asia/Kolkata')!;
 
     // Not accepted yet.
     expect((await schedule(owner.token, inTwoDays)).statusCode).toBe(409);
@@ -716,6 +960,7 @@ describe('API routes', () => {
     // Bad times and outsiders are refused.
     expect((await schedule(owner.token, new Date(Date.now() - 3600 * 1000).toISOString())).statusCode).toBe(400);
     expect((await schedule(owner.token, new Date(Date.now() + 200 * 24 * 3600 * 1000).toISOString())).statusCode).toBe(400);
+    expect((await schedule(owner.token, outsideAvailability)).statusCode).toBe(400);
     const outsider = await makeUser('owner-9', 'owner');
     expect((await schedule(outsider.token, inTwoDays)).statusCode).toBe(404);
 
@@ -726,13 +971,27 @@ describe('API routes', () => {
     const types = (await ctx.app.inject({ method: 'GET', url: '/me/notifications', headers: bearer(pro.token) })).json().notifications.map((n: { type: string }) => n.type);
     expect(types).toContain('consultation_scheduled');
 
+    // A changed time stays proposed until the other participant explicitly confirms it.
+    const proposedTime = slotsForDate(dateKey, 'Asia/Kolkata', 60, windows)[1]!.startsAt;
+    const proposed = await schedule(owner.token, proposedTime);
+    expect(proposed.statusCode).toBe(200);
+    expect(proposed.json().scheduledAt).toBe(inTwoDays);
+    const proposalId = proposed.json().pendingSchedule.id;
+    const confirm = (token: string) => ctx.app.inject({ method: 'POST', url: `/me/requests/${id}/schedule`, headers: bearer(token), payload: { startsAt: proposedTime, proposalId } });
+    expect((await confirm(owner.token)).statusCode).toBe(409);
+    const confirmed = await confirm(pro.token);
+    expect(confirmed.statusCode).toBe(200);
+    expect(confirmed.json().scheduledAt).toBe(proposedTime);
+    expect(confirmed.json().pendingSchedule).toBeNull();
+    expect((await confirm(pro.token)).statusCode).toBe(409);
+
     // It cannot be completed before it starts.
     const early = await ctx.app.inject({ method: 'POST', url: `/me/requests/${id}/action`, headers: bearer(owner.token), payload: { action: 'complete' } });
     expect(early.statusCode).toBe(409);
     expect(early.json()).toEqual({ error: 'REQUEST_NOT_YET_STARTED' });
 
     // Once the time has passed it can be completed, and the other person is told.
-    await ctx.requests.setSchedule(id, new Date(Date.now() - 60 * 1000));
+    await ctx.requests.setSchedule(id, new Date(Math.floor(Date.now() / 60000) * 60000 - 60 * 1000), 60);
     const done = await ctx.app.inject({ method: 'POST', url: `/me/requests/${id}/action`, headers: bearer(pro.token), payload: { action: 'complete' } });
     expect(done.statusCode).toBe(200);
     expect(done.json().status).toBe('completed');

@@ -16,6 +16,9 @@ export interface ThemeColors {
   danger: string; // errors and destructive buttons
   dangerSoft: string; // soft red tile behind a destructive row's icon
   warning: string; // warnings
+  purple: string; // calendar and secondary feature highlights
+  yellow: string; // rating and achievement highlights
+  unselectedSurface: string; // neutral surface for an inactive choice
   chip: string; // unselected chips
   blueSoft: string; // soft blue card background
   greenSoft: string; // soft green card background
@@ -41,6 +44,9 @@ const light: ThemeColors = {
   danger: '#D62839',
   dangerSoft: '#FDECEE',
   warning: '#B54708',
+  purple: '#9133D6',
+  yellow: '#FFC400',
+  unselectedSurface: '#E9EDF2',
   chip: '#E6EFFF',
   blueSoft: '#E3EEFF',
   greenSoft: '#DDF6EE',
@@ -66,6 +72,9 @@ const dark: ThemeColors = {
   danger: '#FF8A80',
   dangerSoft: '#3A2630',
   warning: '#FFC46B',
+  purple: '#C38BFF',
+  yellow: '#FFD54F',
+  unselectedSurface: '#333D4A',
   chip: '#2F3D52',
   blueSoft: '#263A5C',
   greenSoft: '#1F4A40',
@@ -97,6 +106,7 @@ export const type = {
   title: { fontSize: 22, fontFamily: fontFamily.bold, lineHeight: 28 },
   heading: { fontSize: 17, fontFamily: fontFamily.bold, lineHeight: 24 },
   body: { fontSize: 15, fontFamily: fontFamily.regular, lineHeight: 22 },
+  footnote: { fontSize: 11, fontFamily: fontFamily.medium, lineHeight: 16 },
   caption: { fontSize: 13, fontFamily: fontFamily.semibold, lineHeight: 18 },
 } as const;
 

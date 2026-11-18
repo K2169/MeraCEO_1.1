@@ -12,12 +12,13 @@ export interface Filters {
   industry: IndustryId | null;
   fee: FeeBand | null;
   format: Format | null;
+  availability: 'configured' | null;
 }
 
-export const NO_FILTERS: Filters = { industry: null, fee: null, format: null };
+export const NO_FILTERS: Filters = { industry: null, fee: null, format: null, availability: null };
 
 // How many filters are switched on, for the dot on the Filters button.
-export const activeFilterCount = (f: Filters) => [f.industry, f.fee, f.format].filter(Boolean).length;
+export const activeFilterCount = (f: Filters) => [f.industry, f.fee, f.format, f.availability].filter(Boolean).length;
 
 // The Filters bottom sheet. `show` says which groups to offer: owners get all three, professionals only industry.
 // Tapping a chip that is already chosen clears it.
@@ -40,6 +41,9 @@ export function FilterSheet({ visible, onClose, filters, onChange, show }: { vis
           : null}
         {show.includes('format')
           ? group(t('filter.format'), <OptionChips options={formatOptions()} selected={filters.format ? [filters.format] : []} onChange={(v) => onChange({ ...filters, format: v[0] === filters.format ? null : (v[0] ?? null) })} />)
+          : null}
+        {show.includes('availability')
+          ? group(t('profile.availability'), <OptionChips options={[{ value: 'configured' as const, label: t('pro.weeklyAvailability') }]} selected={filters.availability ? [filters.availability] : []} onChange={([value]) => onChange({ ...filters, availability: value === filters.availability ? null : value ?? null })} />)
           : null}
         <View style={{ flexDirection: 'row', gap: space.md }}>
           <View style={{ flex: 1 }}>

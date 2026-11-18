@@ -13,10 +13,11 @@ interface InputProps {
   keyboardType?: 'default' | 'numeric' | 'number-pad' | 'phone-pad' | 'url' | 'email-address';
   maxLength?: number;
   autoCapitalize?: 'none' | 'sentences' | 'words';
+  editable?: boolean;
 }
 
 // A friendly text field: label above, big rounded box, red message when something is wrong.
-export function Input({ label, value, onChangeText, placeholder, error, helper, multiline = false, keyboardType = 'default', autoCapitalize, maxLength }: InputProps) {
+export function Input({ label, value, onChangeText, placeholder, error, helper, multiline = false, keyboardType = 'default', autoCapitalize, maxLength, editable = true }: InputProps) {
   const { colors, radius, space, type } = useTheme();
   return (
     <View style={{ gap: space.sm }}>
@@ -25,6 +26,7 @@ export function Input({ label, value, onChangeText, placeholder, error, helper, 
         accessibilityLabel={label}
         value={value}
         onChangeText={onChangeText}
+        editable={editable}
         placeholder={placeholder}
         placeholderTextColor={colors.muted}
         multiline={multiline}

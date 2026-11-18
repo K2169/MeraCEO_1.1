@@ -6,12 +6,15 @@ import type { GoogleIdentity } from '../auth/google.js';
 
 export type Role = 'owner' | 'professional';
 
-// Server-side user record. The email is personal data: it is never logged and never returned by the API.
+// Server-side user record. Email is private account data: never logged or returned in public profile APIs.
 export interface UserRecord {
   id: string;
   googleSub: string;
   email: string;
   name: string | null;
+  emailVerified?: boolean;
+  passwordHash?: string;
+  passwordEmail?: string;
   role: Role | null;
   ageConfirmed: boolean | null;
   ageConfirmedAt: Date | null;
@@ -30,6 +33,8 @@ export class RoleAlreadySetError extends Error {
 export interface UserRepository {
   upsertFromGoogle(identity: GoogleIdentity, now?: Date): Promise<UserRecord>;
   findById(id: string): Promise<UserRecord | null>;
+  findByVerifiedEmail(email: string): Promise<UserRecord | null>;
+  setPassword(id: string, email: string, passwordHash: string): Promise<boolean>;
   // Sets the role once. Throws RoleAlreadySetError if a role already exists.
   setRoleOnce(id: string, role: Role): Promise<UserRecord | null>;
   // Stores the person's ISO calendar date and the age check result.
@@ -56,7 +61,7 @@ export class MongoUserRepository implements UserRepository {
     const result = await this.users.findOneAndUpdate(
       { googleSub: identity.sub },
       {
-        $set: { email: identity.email, name: identity.name ?? null, lastSignInAt: now },
+        $set: { email: identity.email.trim().toLowerCase(), emailVerified: true, name: identity.name ?? null, lastSignInAt: now },
         $setOnInsert: {
           id: randomUUID(),
           googleSub: identity.sub,
@@ -75,6 +80,17 @@ export class MongoUserRepository implements UserRepository {
 
   async findById(id: string): Promise<UserRecord | null> {
     return this.users.findOne({ id });
+  }
+
+  // Password credentials are attached only to an email verified by Google.
+  async findByVerifiedEmail(email: string): Promise<UserRecord | null> {
+    const matches = await this.users.find({ email: email.trim().toLowerCase(), emailVerified: true }).limit(2).toArray();
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  async setPassword(id: string, email: string, passwordHash: string): Promise<boolean> {
+    const result = await this.users.updateOne({ id, email, emailVerified: true }, { $set: { passwordHash, passwordEmail: email } });
+    return result.matchedCount === 1;
   }
 
   async setRoleOnce(id: string, role: Role): Promise<UserRecord | null> {
@@ -113,13 +129,14 @@ export class InMemoryUserRepository implements UserRepository {
     const existingId = this.bySub.get(identity.sub);
     if (existingId) {
       const user = this.byId.get(existingId)!;
-      Object.assign(user, { email: identity.email, name: identity.name ?? null, lastSignInAt: now });
+      Object.assign(user, { email: identity.email.trim().toLowerCase(), emailVerified: true, name: identity.name ?? null, lastSignInAt: now });
       return { ...user };
     }
     const user: UserRecord = {
       id: randomUUID(),
       googleSub: identity.sub,
-      email: identity.email,
+      email: identity.email.trim().toLowerCase(),
+      emailVerified: true,
       name: identity.name ?? null,
       role: null,
       ageConfirmed: null,
@@ -136,6 +153,19 @@ export class InMemoryUserRepository implements UserRepository {
   async findById(id: string): Promise<UserRecord | null> {
     const user = this.byId.get(id);
     return user ? { ...user } : null;
+  }
+
+  // Ambiguous duplicate verified emails cannot authenticate with a password.
+  async findByVerifiedEmail(email: string): Promise<UserRecord | null> {
+    const matches = [...this.byId.values()].filter((user) => user.emailVerified === true && user.email === email.trim().toLowerCase());
+    return matches.length === 1 ? { ...matches[0] } : null;
+  }
+
+  async setPassword(id: string, email: string, passwordHash: string): Promise<boolean> {
+    const user = this.byId.get(id);
+    if (!user || user.email !== email || user.emailVerified !== true) return false;
+    Object.assign(user, { passwordHash, passwordEmail: email });
+    return true;
   }
 
   async setRoleOnce(id: string, role: Role): Promise<UserRecord | null> {

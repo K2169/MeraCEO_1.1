@@ -9,6 +9,7 @@ const envSchema = z.object({
   GOOGLE_WEB_CLIENT_ID: z.string().endsWith('.apps.googleusercontent.com'),
   GOOGLE_ANDROID_CLIENT_ID: z.string().endsWith('.apps.googleusercontent.com').optional(),
   GOOGLE_ANDROID_RELEASE_CLIENT_ID: z.string().endsWith('.apps.googleusercontent.com').optional(),
+  SUPPORT_EMAIL: z.string().email().default('krishnam@meraceo.com'),
   S3_ENDPOINT: z.string().url(),
   S3_REGION: z.string().min(1),
   S3_BUCKET: z.string().min(1),
@@ -21,6 +22,7 @@ export interface Config {
   mongo: { uri: string; db: string };
   sessionSecret: string;
   googleAudiences: string[];
+  supportEmail: string;
   s3: { endpoint: string; region: string; bucket: string; accessKeyId: string; secretAccessKey: string };
 }
 
@@ -41,6 +43,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     googleAudiences: [e.GOOGLE_WEB_CLIENT_ID, e.GOOGLE_ANDROID_CLIENT_ID, e.GOOGLE_ANDROID_RELEASE_CLIENT_ID].filter(
       (id): id is string => Boolean(id),
     ),
+    supportEmail: e.SUPPORT_EMAIL,
     s3: {
       endpoint: e.S3_ENDPOINT,
       region: e.S3_REGION,

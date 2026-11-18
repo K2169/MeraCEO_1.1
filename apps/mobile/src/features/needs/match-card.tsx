@@ -10,6 +10,7 @@ import { Icon } from '@/components/icon';
 import { SaveButton } from './save-button';
 import { Input } from '@/components/input';
 import { useTheme } from '@/components/use-theme';
+import { useToast } from '@/components/toast';
 import { useSession } from '@/features/auth/session-provider';
 import { api, ApiError, type Match, type RequestStatus } from '@/lib/api';
 import { placeLine } from '@/features/onboarding/wizard-utils';
@@ -20,6 +21,7 @@ function reasonText(match: Match, reason: Match['reasons'][number]): string {
   if (reason === 'expertise') return t('match.reasonExpertise', { areas: match.matchedExpertise.map((id) => t(`expertise.${id}`)).join(', ') });
   if (reason === 'industry') return t('match.reasonIndustry');
   if (reason === 'budget') return t('match.reasonBudget');
+  if (reason === 'business_profile') return t('match.reasonBusinessProfile');
   return t('match.reasonFormat');
 }
 
@@ -28,6 +30,7 @@ function reasonText(match: Match, reason: Match['reasons'][number]): string {
 export function MatchCard({ match, needId }: { match: Match; needId?: string }) {
   const { colors, radius, space, type } = useTheme();
   const { token } = useSession();
+  const { showToast } = useToast();
   const router = useRouter();
   // Status of the request for this person: starts from the server value and changes after sending.
   const [status, setStatus] = useState<RequestStatus | null>(match.requestStatus);
@@ -45,6 +48,7 @@ export function MatchCard({ match, needId }: { match: Match; needId?: string }) 
       await api.sendRequest(token, { needId, professionalId: match.id, note: note.trim() || undefined });
       setStatus('pending');
       setOpen(false);
+      showToast(t('request.sentToast'), 'success');
     } catch (err) {
       setError(err instanceof ApiError && err.status === 409 ? t('request.exists') : t('request.sendFailed'));
     } finally {
@@ -110,6 +114,7 @@ export function MatchCard({ match, needId }: { match: Match; needId?: string }) 
       <BottomSheet visible={open} onClose={() => setOpen(false)} title={t('request.sendTitle')}>
         <View style={{ gap: space.md, paddingBottom: space.md }}>
           <Text style={[type.body, { color: colors.muted }]}>{t('request.toPerson', { name: match.name })}</Text>
+          <Text style={[type.caption, { color: colors.muted }]}>{t('request.sharingNotice')}</Text>
           <Input label={t('request.noteLabel')} value={note} onChangeText={setNote} multiline />
           {error ? <Text style={[type.caption, { color: colors.danger }]}>{error}</Text> : null}
           <Button label={t('request.send')} onPress={send} disabled={busy} />

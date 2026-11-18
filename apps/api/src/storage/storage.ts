@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, type S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, type S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 import { createUploadUrl, type PresignRequest, type PresignResult } from './presign.js';
@@ -12,6 +12,8 @@ export interface Storage {
   createUploadUrl(req: PresignRequest): Promise<PresignResult | null>;
   // A short-lived link for viewing one stored file.
   readUrl(key: string): Promise<string>;
+  // Reads actual object metadata before accepting an uploaded file.
+  inspect(key: string): Promise<{ contentType: string; contentLength: number } | null>;
   // Deletes one file.
   remove(key: string): Promise<void>;
   // Deletes every file whose key starts with the prefix (used when an account is deleted).
@@ -31,6 +33,16 @@ export class S3Storage implements Storage {
 
   readUrl(key: string): Promise<string> {
     return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key: key }), { expiresIn: READ_URL_SECONDS });
+  }
+
+  async inspect(key: string): Promise<{ contentType: string; contentLength: number } | null> {
+    try {
+      const result = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+      return { contentType: result.ContentType ?? '', contentLength: result.ContentLength ?? 0 };
+    } catch (error) {
+      if ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404) return null;
+      throw error;
+    }
   }
 
   async remove(key: string): Promise<void> {

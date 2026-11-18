@@ -85,12 +85,16 @@ export const SECTORS = [
   'other',
 ] as const;
 export const REVENUE_BANDS = ['pre_revenue', 'lt_10_lakh', '10_50_lakh', '50_lakh_1_cr', '1_10_cr', 'gt_10_cr'] as const;
+export type RevenueBand = (typeof REVENUE_BANDS)[number];
 export const TEAM_SIZES = ['solo', '2_10', '11_50', '51_200', '201_500', '500_plus'] as const;
+export type TeamSize = (typeof TEAM_SIZES)[number];
 
 // Professional details.
 export const EMPLOYMENT_TYPES = ['independent', 'full_time', 'part_time', 'retired'] as const;
 export const ENGAGEMENT_TYPES = ['one_time', 'ongoing', 'both'] as const;
 export const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+// Common advisory call lengths. These describe a consultation offer, not a booked appointment.
+export const CONSULTATION_DURATIONS = [30, 60, 90] as const;
 export const QUALIFICATIONS = [
   'class_10',
   'class_12',

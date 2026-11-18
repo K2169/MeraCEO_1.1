@@ -1,5 +1,6 @@
+import { type Href, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 
 import { Icon } from '@/components/icon';
 import { Avatar } from '@/components/avatar';
@@ -15,7 +16,10 @@ import { TimeSheet } from './time-sheet';
 type Action = 'accept' | 'decline' | 'cancel' | 'complete';
 
 // A planned start time written for people, like "Mon, 12 Nov, 4:00 pm".
-export const formatWhen = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+export const formatWhen = (iso: string, timezone?: string | null) => new Intl.DateTimeFormat(undefined, {
+  weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit',
+  ...(timezone ? { timeZone: timezone, timeZoneName: 'short' as const } : {}),
+}).format(new Date(iso));
 
 // One request. Owners see who they asked; professionals see who asked and about what.
 // The buttons shown depend on the status and who is looking (the same rules the server enforces).
@@ -30,9 +34,10 @@ export function RequestCard({
   viewer: 'owner' | 'professional';
   busy: boolean;
   onAction: (action: Action) => void;
-  onSchedule: (iso: string) => Promise<boolean>;
+  onSchedule: (iso: string, proposalId?: string) => Promise<boolean>;
 }) {
   const { colors, radius, space, type } = useTheme();
+  const router = useRouter();
   const [picking, setPicking] = useState(false);
   const waiting = item.status === 'pending';
   const accepted = item.status === 'accepted';
@@ -79,9 +84,21 @@ export function RequestCard({
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.sm, backgroundColor: colors.background, borderRadius: radius.md, paddingHorizontal: space.md, paddingVertical: space.sm + 2 }}>
           <Icon name="calendar-outline" size={16} color={colors.primary} />
           <Text style={[type.caption, { color: item.scheduledAt ? colors.text : colors.muted }]}>
-            {item.scheduledAt ? t(started || item.status === 'completed' ? 'consult.was' : 'consult.when', { when: formatWhen(item.scheduledAt) }) : t('consult.notScheduled')}
+            {item.scheduledAt ? t(started || item.status === 'completed' ? 'consult.was' : 'consult.when', { when: formatWhen(item.scheduledAt, item.consultation?.timezone) }) : t('consult.notScheduled')}
           </Text>
         </View>
+      ) : null}
+
+      {accepted && item.pendingSchedule ? <View style={{ gap: space.sm }}>
+        <Text style={[type.body, { color: colors.text }]}>{t('consult.proposedTime', { when: formatWhen(item.pendingSchedule.startsAt, item.consultation?.timezone) })}</Text>
+        {item.pendingSchedule.proposedBy === viewer ? <Text style={[type.caption, { color: colors.muted }]}>{t('consult.awaitingConfirmation')}</Text> : <Button small label={t('consult.confirmTime')} disabled={busy} onPress={() => void onSchedule(item.pendingSchedule!.startsAt, item.pendingSchedule!.id)} />}
+      </View> : null}
+
+      {accepted || item.status === 'completed' ? (
+        <Pressable accessibilityRole="button" onPress={() => router.push(`/messages/${item.id}` as Href)} style={({ pressed }) => ({ minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, opacity: pressed ? 0.72 : 1 })}>
+          <Icon name="mail-outline" size={18} color={colors.primary} />
+          <Text style={[type.caption, { color: colors.primary }]}>{t('chat.open')}</Text>
+        </Pressable>
       ) : null}
 
       {/* Footer: a thin line, then the actions that fit this status and person */}
@@ -109,6 +126,9 @@ export function RequestCard({
         visible={picking}
         onClose={() => setPicking(false)}
         busy={busy}
+        availabilityWindows={item.consultation?.availabilityWindows ?? []}
+        timezone={item.consultation?.timezone ?? null}
+        durationMinutes={item.consultation?.durationMinutes ?? null}
         onConfirm={async (iso) => {
           if (await onSchedule(iso)) setPicking(false);
         }}

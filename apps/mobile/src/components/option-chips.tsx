@@ -12,21 +12,33 @@ export function OptionChips<T extends string>({
   options,
   selected,
   multi = false,
+  maxSelected,
+  disabledValues = [],
   onChange,
 }: {
   options: Option<T>[];
   selected: T[];
   multi?: boolean;
+  maxSelected?: number;
+  disabledValues?: readonly T[];
   onChange: (next: T[]) => void;
 }) {
   function toggle(value: T) {
     if (!multi) return onChange([value]);
-    onChange(selected.includes(value) ? selected.filter((v) => v !== value) : [...selected, value]);
+    if (selected.includes(value)) return onChange(selected.filter((v) => v !== value));
+    if (maxSelected !== undefined && selected.length >= maxSelected) return;
+    onChange([...selected, value]);
   }
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
       {options.map((o) => (
-        <Chip key={o.value} label={o.label} selected={selected.includes(o.value)} onPress={() => toggle(o.value)} />
+        <Chip
+          key={o.value}
+          label={o.label}
+          selected={selected.includes(o.value)}
+          disabled={!selected.includes(o.value) && disabledValues.includes(o.value)}
+          onPress={() => toggle(o.value)}
+        />
       ))}
     </View>
   );

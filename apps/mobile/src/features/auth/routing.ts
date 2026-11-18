@@ -6,9 +6,11 @@ import type { Me } from '@/lib/api';
 // age check (W2-08) -> role (W2-04) -> onboarding (W3-01/02) -> consent (W3-04) -> dashboard.
 export function nextRoute(user: Me): Href {
   if (user.ageConfirmed === false) return '/age-blocked' as Href;
-  if (!user.dateOfBirthSet) return '/age' as Href;
-  if (user.ageConfirmed == null) return '/age' as Href;
   if (user.role == null) return '/role' as Href;
+  // Both roles provide DOB inside their onboarding flow; there is no standalone age collection page.
+  if (!user.dateOfBirthSet || user.ageConfirmed == null) {
+    return (user.role === 'owner' ? '/onboarding/owner' : '/onboarding/professional') as Href;
+  }
   if (!user.profileComplete) return (user.role === 'owner' ? '/onboarding/owner' : '/onboarding/professional') as Href;
   if (!user.consentDone) return '/consent' as Href;
   return (user.role === 'owner' ? '/dashboard/owner' : '/dashboard/professional') as Href;

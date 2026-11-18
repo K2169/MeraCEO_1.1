@@ -9,9 +9,11 @@ import {
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
+import { initializePreferences, usePreferences } from '@/features/settings/preferences';
 import { SessionProvider } from '@/features/auth/session-provider';
+import { ToastProvider } from '@/components/toast';
 
 // Keep the native splash up until the fonts are ready, so no screen shows in the wrong font.
 void SplashScreen.preventAutoHideAsync();
@@ -20,6 +22,9 @@ SplashScreen.setOptions({ duration: 400, fade: true });
 
 // Root of the app: loads the fonts, then wraps every screen in the session provider.
 export default function RootLayout() {
+  const preferences = usePreferences();
+  const [preferencesReady, setPreferencesReady] = useState(false);
+  useEffect(() => { void initializePreferences().finally(() => setPreferencesReady(true)); }, []);
   const [fontsLoaded] = useFonts({
     DMSans_400Regular,
     DMSans_500Medium,
@@ -30,16 +35,18 @@ export default function RootLayout() {
 
   // Hide the native splash once the fonts are loaded.
   useEffect(() => {
-    if (fontsLoaded) void SplashScreen.hideAsync();
-  }, [fontsLoaded]);
+    if (fontsLoaded && preferencesReady) void SplashScreen.hideAsync();
+  }, [fontsLoaded, preferencesReady]);
 
   // Draw nothing until the fonts are ready.
-  if (!fontsLoaded) return null;
+  if (!fontsLoaded || !preferencesReady) return null;
 
   return (
     <SessionProvider>
-      <StatusBar style="auto" />
-      <Stack screenOptions={{ headerShown: false, animation: 'fade' }} />
+      <ToastProvider key={preferences.language}>
+        <StatusBar style="auto" />
+        <Stack screenOptions={{ headerShown: false, animation: 'fade' }} />
+      </ToastProvider>
     </SessionProvider>
   );
 }

@@ -4,11 +4,13 @@ import { ScrollView, Text, View } from 'react-native';
 import { Button } from '@/components/button';
 import { Card } from '@/components/card';
 import { Chip } from '@/components/chip';
+import { DateOfBirthPicker } from '@/components/date-of-birth-picker';
 import { EmptyState } from '@/components/empty-state';
 import { MatchCard } from '@/features/needs/match-card';
 import { NeedCard } from '@/features/needs/need-card';
 import { RequestCard } from '@/features/requests/request-card';
 import { Input } from '@/components/input';
+import { OnboardingStepper } from '@/components/onboarding-stepper';
 import { StatusBadge } from '@/components/status-badge';
 import { ThemeScope, useTheme } from '@/components/use-theme';
 import { t } from '@/i18n';
@@ -17,11 +19,24 @@ import { t } from '@/i18n';
 function ComponentSet() {
   const { colors, space, type } = useTheme();
   const [value, setValue] = useState('');
+  const [dateOfBirth, setDateOfBirth] = useState('15/08/1992');
+  const [step, setStep] = useState(0);
   const [selected, setSelected] = useState(true);
   const error = value.trim() ? undefined : t('dev.inputError');
 
   return (
     <View style={{ gap: space.md }}>
+      <OnboardingStepper
+        steps={[
+          { id: 'P1A', stage: 'pro.stagePersonal' },
+          { id: 'P1B', stage: 'pro.stageProfessional' },
+          { id: 'P1C', stage: 'pro.stageExpertise' },
+          { id: 'P1D', stage: 'pro.stageReview' },
+        ]}
+        current={step}
+        furthestUnlocked={3}
+        onSelect={setStep}
+      />
       <MatchCard needId="demo" match={{ id: 'x', name: 'Arjun Kapoor', headline: 'Taking local brands to new countries', country: 'India', state: 'Delhi', city: 'Delhi', expertise: ['strategy'], industry: 'retail', feeBand: 'medium', formats: ['online'], requestStatus: null, score: 85, reasons: ['expertise', 'industry', 'format'], matchedExpertise: ['strategy'] }} />
       <NeedCard need={{ id: 'n', title: 'Improve our margins', challenge: 'x', expertise: ['strategy', 'finance'], industry: 'retail', budgetBand: 'medium', status: 'open' }} onPress={() => undefined} />
       <RequestCard viewer="owner" busy={false} onAction={() => undefined} onSchedule={async () => true} item={{ id: 'r1', status: 'pending', note: 'We would like a short call this week.', createdAt: '', scheduledAt: null, need: { id: 'n', title: 'Improve our margins' }, professional: { id: 'p', name: 'Arjun Kapoor', headline: 'Growth', photoUrl: null } }} />
@@ -35,6 +50,12 @@ function ComponentSet() {
         value={value}
         onChangeText={setValue}
         error={error}
+      />
+      <DateOfBirthPicker
+        label={t('age.dateLabel')}
+        helper={t('age.body')}
+        value={dateOfBirth}
+        onChangeText={setDateOfBirth}
       />
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
         <Chip label={t('dev.chip')} selected={selected} onPress={() => setSelected(!selected)} />

@@ -4,3 +4,6 @@ export * from './schemas/onboarding';
 export * from './schemas/request';
 export * from './matching';
 export * from './schemas/need';
+export * from './needDuplicate';
+export * from './availability';
+export * from './message-policy';

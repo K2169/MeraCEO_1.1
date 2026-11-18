@@ -16,11 +16,13 @@ export function BottomSheet({
   onClose,
   title,
   children,
+  maxHeight = '75%',
 }: {
   visible: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
+  maxHeight?: string | number;
 }) {
   const { colors, radius, space, type } = useTheme();
   const insets = useSafeAreaInsets();
@@ -108,7 +110,7 @@ export function BottomSheet({
             borderTopRightRadius: 24,
             paddingHorizontal: space.xl,
             paddingBottom: insets.bottom + space.xl,
-            maxHeight: '75%',
+            maxHeight,
             transform: [{ translateY: offset }],
           }}
         >

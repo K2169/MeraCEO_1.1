@@ -1,6 +1,7 @@
-import { type Href, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { ownerRegistrationSchema } from '@meraceo/shared';
+import { type Href, useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { Avatar } from '@/components/avatar';
 import { Button } from '@/components/button';
@@ -60,11 +61,42 @@ export function AccountScreen() {
   const isOwner = user?.role === 'owner';
   const [profile, setProfile] = useState<Profile | null>(null);
   const photo = usePhoto();
+  const [activity, setActivity] = useState<{ consultations: number; connected: number; openNeeds: number; saved: number } | null>(null);
+  const [activityFailed, setActivityFailed] = useState(false);
+  const [activityLoading, setActivityLoading] = useState(false);
+  // A failed count request is not an empty account; preserve prior values and expose retry.
+  const reloadActivity = useCallback(async () => {
+    if (!token || !isOwner) return;
+    setActivityLoading(true);
+    setActivityFailed(false);
+    try {
+      const [requests, needs, saved] = await Promise.all([
+        api.getRequests(token), api.getNeeds(token), api.searchProfessionals(token, { saved: 'true' }),
+      ]);
+      const consultations = requests.requests.filter((request) => request.status === 'accepted' || request.status === 'completed');
+      setActivity({
+        consultations: consultations.length,
+        connected: new Set(consultations.map((request) => request.professional?.id).filter(Boolean)).size,
+        openNeeds: needs.needs.filter((need) => need.status === 'open').length,
+        saved: saved.professionals.length,
+      });
+    } catch { setActivityFailed(true); }
+    finally { setActivityLoading(false); }
+  }, [token, isOwner]);
+  useFocusEffect(useCallback(() => { void reloadActivity(); }, [reloadActivity]));
 
-  // Load the saved profile.
-  useEffect(() => {
-    if (token) api.getProfile(token).then((p) => setProfile(p.data)).catch(() => undefined);
+  const [failed, setFailed] = useState(false);
+  const [loading, setLoading] = useState(false);
+  // Refresh after profile editing; keep old data visible during recoverable failures.
+  const reload = useCallback(async () => {
+    if (!token) return;
+    setLoading(true);
+    setFailed(false);
+    try { setProfile((await api.getProfile(token)).data); }
+    catch { setFailed(true); }
+    finally { setLoading(false); }
   }, [token]);
+  useFocusEffect(useCallback(() => { void reload(); }, [reload]));
 
   const str = (key: string) => (typeof profile?.[key] === 'string' ? (profile[key] as string) : '');
   const list = (key: string) => (Array.isArray(profile?.[key]) ? (profile[key] as string[]) : []);
@@ -94,6 +126,19 @@ export function AccountScreen() {
       ];
   const shownDetails = details.filter((d) => d.value);
   const about = isOwner ? str('description') : str('experience');
+  const readinessIssues = profile ? ownerRegistrationSchema.safeParse(profile).error?.issues ?? [] : [];
+  const groupReady = (fields: string[]) => Boolean(profile) && !readinessIssues.some((issue) => fields.includes(String(issue.path[0])));
+  const readiness = [
+    { label: t('profile.businessReady'), ready: groupReady(['businessName', 'description', 'industry', 'businessType', 'registrationType', 'country', 'state', 'city', 'revenue', 'teamSize', 'website']) },
+    { label: t('profile.ownerReady'), ready: groupReady(['ownerName', 'designation', 'yearsInBusiness', 'ownerBio', 'phone', 'linkedin', 'qualification']) },
+    { label: t('profile.needsReady'), ready: groupReady(['needTitle', 'challenge', 'needTimeline', 'needExpertise', 'goals', 'budgetBand', 'supportBudgets', 'preferredFormat']) },
+  ];
+  const activityLinks = activity ? [
+    { label: t('consultations.title'), count: activity.consultations, href: '/dashboard/owner/consultations' },
+    { label: t('profile.connectedExperts'), count: activity.connected, href: '/dashboard/owner/consultations' },
+    { label: t('profile.openNeeds'), count: activity.openNeeds, href: '/dashboard/owner/requests' },
+    { label: t('profile.savedExperts'), count: activity.saved, href: '/dashboard/owner?saved=true' },
+  ] : [];
 
   return (
     <TabScreen
@@ -104,6 +149,8 @@ export function AccountScreen() {
         </Pressable>
       }
     >
+      {failed ? <View style={{ gap: space.md }}><Text accessibilityRole="alert" style={[type.body, { color: colors.danger }]}>{t('common.genericError')}</Text><Button label={t('common.retry')} onPress={() => void reload()} disabled={loading} /></View> : null}
+      {loading && !profile ? <ActivityIndicator accessibilityLabel={t('common.loading')} color={colors.primary} /> : null}
       {/* Header card: a colour band, the photo overlapping its edge, name, headline, place, status and actions */}
       <View style={{ backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' }}>
         <View style={{ height: 76, backgroundColor: colors.blueSoft }} />
@@ -136,6 +183,30 @@ export function AccountScreen() {
           {photo.failed ? <Text style={[type.caption, { color: colors.danger }]}>{t('photo.failed')}</Text> : null}
         </View>
       </View>
+
+      {isOwner ? <>
+        <Section title={t('profile.activity')}>
+          {activityLoading && !activity ? <ActivityIndicator color={colors.primary} accessibilityLabel={t('common.loading')} /> : null}
+          {activityLinks.map((item) => (
+            <Pressable key={item.label} accessibilityRole="button" accessibilityLabel={`${item.label}: ${item.count}`} onPress={() => router.push(item.href as Href)} style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: space.md, minHeight: 48, opacity: pressed ? 0.68 : 1 })}>
+              <Text style={[type.body, { color: colors.text, flex: 1 }]}>{item.label}</Text>
+              <Text style={[type.heading, { color: colors.primary }]}>{item.count}</Text>
+              <Icon name="chevron-forward" size={18} color={colors.muted} />
+            </Pressable>
+          ))}
+          {activityFailed ? <><Text accessibilityRole="alert" style={[type.caption, { color: colors.danger }]}>{t('common.genericError')}</Text><Button label={t('common.retry')} variant="secondary" disabled={activityLoading} onPress={() => void reloadActivity()} /></> : null}
+        </Section>
+        {profile ? <Section title={t('profile.readiness')}>
+          {readiness.map((item) => <View key={item.label} style={{ flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingVertical: space.xs }}>
+            <Icon name={item.ready ? 'checkmark' : 'information-circle-outline'} size={20} color={item.ready ? colors.accentText : colors.muted} />
+            <Text style={[type.body, { color: colors.text, flex: 1 }]}>{item.label}</Text>
+            <Text style={[type.caption, { color: colors.muted }]}>{t(item.ready ? 'profile.ready' : 'profile.needsAttention')}</Text>
+          </View>)}
+          <Button label={t('account.editProfile')} variant="secondary" onPress={() => router.push('/account/edit' as Href)} />
+        </Section> : null}
+        {str('ownerBio') ? <Section title={t('owner.bio')}><Text style={[type.body, { color: colors.text }]}>{str('ownerBio')}</Text></Section> : null}
+        {list('needExpertise').length ? <Section title={t('owner.needExpertise')}><Tags items={list('needExpertise').map((area) => t(`expertise.${area}`))} /></Section> : null}
+      </> : null}
 
       {about ? (
         <Section title={t('profile.about')}>

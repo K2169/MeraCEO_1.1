@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Pressable } from 'react-native';
 
 import { Icon } from '@/components/icon';
+import { useToast } from '@/components/toast';
 import { useTheme } from '@/components/use-theme';
 import { useSession } from '@/features/auth/session-provider';
 import { api } from '@/lib/api';
@@ -11,6 +12,7 @@ import { t } from '@/i18n';
 export function SaveButton({ professionalId, saved, onChange }: { professionalId: string; saved: boolean; onChange?: (saved: boolean) => void }) {
   const { colors } = useTheme();
   const { token } = useSession();
+  const { showToast } = useToast();
   const [on, setOn] = useState(saved);
   // Follow the value from outside (for example after the list reloads).
   useEffect(() => setOn(saved), [saved]);
@@ -22,9 +24,11 @@ export function SaveButton({ professionalId, saved, onChange }: { professionalId
     onChange?.(next);
     try {
       await (next ? api.saveProfessional(token, professionalId) : api.unsaveProfessional(token, professionalId));
+      showToast(t(next ? 'saved.addedToast' : 'saved.removedToast'), 'success');
     } catch {
       setOn(!next);
       onChange?.(!next);
+      showToast(t('saved.failedToast'), 'error');
     }
   }
 

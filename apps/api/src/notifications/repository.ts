@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { Collection, Db } from 'mongodb';
 
-export type NotificationType = 'request_received' | 'request_accepted' | 'request_declined' | 'request_cancelled' | 'consultation_scheduled' | 'consultation_completed';
+export type NotificationType = 'request_received' | 'request_accepted' | 'request_declined' | 'request_cancelled' | 'consultation_scheduled' | 'consultation_completed' | 'message_received';
 
 // One message for one person, shown in the app's notification list. The names are stored on the record so
 // the list never needs to look other people up.

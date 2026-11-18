@@ -10,10 +10,12 @@ export async function pickAndUpload(token: string, kind: 'photo' | 'logo'): Prom
   const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7 });
   if (result.canceled || !result.assets[0]) return null;
   const asset = result.assets[0];
-  // Only these three kinds are accepted by the server. The picker gives JPEG once it has cropped.
-  const mime = asset.mimeType === 'image/png' || asset.mimeType === 'image/webp' ? asset.mimeType : 'image/jpeg';
-  const { uploadUrl, key } = await api.presignUpload(token, kind, mime);
+  // Validate the actual bytes after the picker has cropped/compressed the image.
   const file = await (await fetch(asset.uri)).blob();
+  const mime = asset.mimeType ?? file.type;
+  const allowed = kind === 'logo' ? ['image/png', 'image/jpeg'] : ['image/png', 'image/jpeg', 'image/webp'];
+  if (!allowed.includes(mime) || file.size <= 0 || (kind === 'logo' && file.size > 2 * 1024 * 1024)) throw new Error('invalid_upload');
+  const { uploadUrl, key } = await api.presignUpload(token, kind, mime);
   const res = await fetch(uploadUrl, { method: 'PUT', headers: { 'content-type': mime }, body: file });
   if (!res.ok) throw new Error('upload_failed');
   return { key, uri: asset.uri };

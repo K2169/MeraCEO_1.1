@@ -8,7 +8,7 @@ export const UPLOAD_KINDS = {
   // A person's profile photo (professionals).
   photo: { folder: 'photos', types: { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' } },
   // A business logo (owners).
-  logo: { folder: 'logos', types: { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' } },
+  logo: { folder: 'logos', types: { 'image/jpeg': 'jpg', 'image/png': 'png' } },
   credential: {
     folder: 'credentials',
     types: { 'image/jpeg': 'jpg', 'image/png': 'png', 'application/pdf': 'pdf' },

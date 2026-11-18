@@ -12,6 +12,8 @@ import { MongoRequestRepository } from './requests/repository.js';
 import { MongoNeedRepository } from './needs/repository.js';
 import { MongoProfileRepository } from './profiles/repository.js';
 import { MongoUserRepository } from './users/repository.js';
+import { MongoGrievanceRepository } from './grievances/repository.js';
+import { MongoMessageRepository } from './messages/repository.js';
 
 const config = loadConfig();
 const mongo = new MongoClient(config.mongo.uri);
@@ -27,10 +29,14 @@ const needs = new MongoNeedRepository(db);
 await needs.ensureIndexes();
 const requests = new MongoRequestRepository(db);
 await requests.ensureIndexes();
+const messages = new MongoMessageRepository(db);
+await messages.ensureIndexes();
 const notifications = new MongoNotificationRepository(db);
 await notifications.ensureIndexes();
 const saved = new MongoSavedRepository(db);
 await saved.ensureIndexes();
+const grievances = new MongoGrievanceRepository(db);
+await grievances.ensureIndexes();
 
 const app = buildApp({
   sessionSecret: config.sessionSecret,
@@ -40,9 +46,12 @@ const app = buildApp({
   profiles,
   needs,
   requests,
+  messages,
   notifications,
   saved,
   storage: new S3Storage(createS3Client(config.s3), config.s3.bucket),
+  grievances,
+  supportEmail: config.supportEmail,
 });
 
 // Bind to all interfaces so the Android emulator can reach the host through 10.0.2.2.

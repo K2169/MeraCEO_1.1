@@ -18,6 +18,9 @@ export async function signInWithGoogle(): Promise<string | null> {
 
 // Signs the device out of Google.
 export async function signOutOfGoogle(): Promise<void> {
-  if (!configured) return;
+  if (!configured) {
+    GoogleSignin.configure({ webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '' });
+    configured = true;
+  }
   await GoogleSignin.signOut();
 }

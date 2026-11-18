@@ -9,6 +9,7 @@ import { Icon } from '@/components/icon';
 import { Input } from '@/components/input';
 import { OptionChips } from '@/components/option-chips';
 import { TabScreen } from '@/components/tab-screen';
+import { useToast } from '@/components/toast';
 import { useTheme } from '@/components/use-theme';
 import { SaveButton } from '@/features/needs/save-button';
 import { useSession } from '@/features/auth/session-provider';
@@ -61,10 +62,12 @@ export default function ProfessionalProfilePage() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { token } = useSession();
+  const { showToast } = useToast();
   const [pro, setPro] = useState<ProfessionalProfile | null>(null);
   const [needs, setNeeds] = useState<OpenNeed[]>([]);
   const [saved, setSaved] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [reload, setReload] = useState(0);
   const [open, setOpen] = useState(false);
   const [needId, setNeedId] = useState<string | null>(null);
   const [note, setNote] = useState('');
@@ -74,16 +77,21 @@ export default function ProfessionalProfilePage() {
   // Load the profile and the owner's open needs.
   useEffect(() => {
     if (!token || !id) return;
+    let active = true;
+    setFailed(false);
+    setPro(null);
     api
       .getProfessional(token, id)
       .then((r) => {
+        if (!active) return;
         setPro(r.professional);
         setSaved(r.saved);
         setNeeds(r.needs);
         setNeedId(r.needs.find((n) => !n.requestStatus)?.id ?? null);
       })
-      .catch(() => setFailed(true));
-  }, [token, id]);
+      .catch(() => { if (active) setFailed(true); });
+    return () => { active = false; };
+  }, [token, id, reload]);
 
   // Send the request for the chosen need, then mark that need as waiting.
   async function send() {
@@ -96,6 +104,7 @@ export default function ProfessionalProfilePage() {
       setNeedId(null);
       setNote('');
       setOpen(false);
+      showToast(t('request.sentToast'), 'success');
     } catch (err) {
       setError(err instanceof ApiError && err.status === 409 ? t('request.exists') : t('request.sendFailed'));
     } finally {
@@ -112,14 +121,17 @@ export default function ProfessionalProfilePage() {
         { label: t('profile.years'), value: pro.yearsExperience !== null ? `${pro.yearsExperience} ${t('profile.yearsUnit')}` : '' },
         { label: t('profile.employment'), value: pro.employmentType ? t(`opt.employment.${pro.employmentType}`) : '' },
         { label: t('profile.industry'), value: pro.industry ? t(`industry.${pro.industry}`) : '' },
+        { label: t('profile.industriesAdvised'), value: pro.industriesAdvised.map((id) => t(`industry.${id}`)).join(', ') },
         { label: t('profile.fee'), value: pro.feeBand ? t(`fee.${pro.feeBand}`) : '' },
         { label: t('profile.formats'), value: pro.formats.map((f) => t(`format.${f}`)).join(', ') },
+        { label: t('profile.duration'), value: pro.durationMinutes ? t('pro.durationMinutes', { minutes: pro.durationMinutes }) : '' },
+        { label: t('profile.availability'), value: pro.availabilityWindows.map((window) => `${t(`opt.day.${window.day}`)} ${window.startTime}–${window.endTime} (${pro.timezone ?? ''})`).join(', ') || pro.days.map((day) => t(`opt.day.${day}`)).join(', ') },
       ].filter((d) => d.value)
     : [];
 
   return (
     <TabScreen title={t('professional.title')} back actions={pro ? <SaveButton professionalId={pro.id} saved={saved} onChange={setSaved} /> : undefined}>
-      {failed ? <Text style={[type.body, { color: colors.muted }]}>{t('professional.notFound')}</Text> : null}
+      {failed ? <View style={{ gap: space.sm }}><Text style={[type.body, { color: colors.muted }]}>{t('professional.notFound')}</Text><Button label={t('common.retry')} onPress={() => setReload((value) => value + 1)} /></View> : null}
       {!pro && !failed ? <ActivityIndicator color={colors.primary} /> : null}
       {pro ? (
         <>
@@ -178,6 +190,27 @@ export default function ProfessionalProfilePage() {
             </Section>
           ) : null}
 
+          {pro.employmentHistory?.length ? <Section title={t('pro.employmentHistory')}>
+            {pro.employmentHistory.map((entry) => <View key={entry.id} style={{ gap: space.xs, paddingVertical: space.sm }}>
+              <Text style={[type.body, { color: colors.text }]}>{entry.title}</Text>
+              <Text style={[type.caption, { color: colors.muted }]}>{entry.organization}</Text>
+              <Text style={[type.caption, { color: colors.muted }]}>{entry.startDate}–{entry.current ? t('pro.currentRole') : entry.endDate}</Text>
+            </View>)}
+          </Section> : pro.workHistory ? <Section title={t('pro.employmentHistory')}><Text style={[type.body, { color: colors.text }]}>{pro.workHistory}</Text></Section> : null}
+          {pro.educationHistory?.length ? <Section title={t('pro.educationHistory')}>
+            {pro.educationHistory.map((entry) => <View key={entry.id} style={{ gap: space.xs, paddingVertical: space.sm }}>
+              <Text style={[type.body, { color: colors.text }]}>{entry.institution}</Text>
+              <Text style={[type.caption, { color: colors.muted }]}>{[t(`opt.qualification.${entry.qualification}`), entry.fieldOfStudy, entry.completionYear].filter(Boolean).join(' · ')}</Text>
+            </View>)}
+          </Section> : pro.qualification ? <Section title={t('pro.educationHistory')}><Text style={[type.body, { color: colors.text }]}>{t(`opt.qualification.${pro.qualification}`)}</Text></Section> : null}
+          {pro.certifications?.length ? <Section title={t('pro.certifications')}>
+            <Text style={[type.caption, { color: colors.muted }]}>{t('pro.certificationVerification')}</Text>
+            {pro.certifications.map((entry) => <View key={entry.id} style={{ gap: space.xs, paddingVertical: space.sm }}>
+              <Text style={[type.body, { color: colors.text }]}>{entry.name}</Text>
+              <Text style={[type.caption, { color: colors.muted }]}>{[entry.issuer, entry.issueYear].filter(Boolean).join(' · ')}</Text>
+            </View>)}
+          </Section> : null}
+
           <BottomSheet visible={open} onClose={() => setOpen(false)} title={t('request.sendTitle')}>
             <View style={{ gap: space.md, paddingBottom: space.md }}>
               <Text style={[type.body, { color: colors.muted }]}>{t('request.toPerson', { name: pro.name })}</Text>
@@ -187,7 +220,8 @@ export default function ProfessionalProfilePage() {
                   <OptionChips options={free.map((n) => ({ value: n.id, label: n.title }))} selected={needId ? [needId] : []} onChange={([v]) => setNeedId(v ?? null)} />
                 </>
               ) : null}
-              <Input label={t('request.noteLabel')} value={note} onChangeText={setNote} multiline />
+              <Text style={[type.caption, { color: colors.muted }]}>{t('request.sharingNotice')}</Text>
+          <Input label={t('request.noteLabel')} value={note} onChangeText={setNote} multiline />
               {error ? <Text style={[type.caption, { color: colors.danger }]}>{error}</Text> : null}
               <Button label={t('request.send')} onPress={send} disabled={busy || !needId} />
             </View>

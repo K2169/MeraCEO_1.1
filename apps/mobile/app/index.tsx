@@ -2,6 +2,7 @@ import { type Href, useRouter } from 'expo-router';
 import { useEffect, useRef } from 'react';
 import { ActivityIndicator, Animated, Text, View } from 'react-native';
 
+import { Button } from '@/components/button';
 import { Logo } from '@/components/logo';
 import { useTheme } from '@/components/use-theme';
 import { nextRoute } from '@/features/auth/routing';
@@ -14,7 +15,7 @@ import { api, ApiError } from '@/lib/api';
 export default function Splash() {
   const { colors, space, type } = useTheme();
   const router = useRouter();
-  const { loading, user, token, refresh } = useSession();
+  const { loading, initializationFailed, retryInitialization, user, token, refresh } = useSession();
   const enter = useRef(new Animated.Value(0)).current;
 
   // Start the logo animation once when the splash appears.
@@ -24,11 +25,19 @@ export default function Splash() {
 
   // Once the session is loaded, decide where to go next.
   useEffect(() => {
-    if (loading) return;
+    if (loading || initializationFailed) return;
     let cancelled = false;
     (async () => {
       if (!user || !token) {
         router.replace('/get-started' as Href);
+        return;
+      }
+      if (user.ageConfirmed !== false && (!user.dateOfBirthSet || user.ageConfirmed == null)) {
+        const intended = user.role ?? await progress.getIntendedRole();
+        if (cancelled) return;
+        router.replace((intended === 'owner'
+          ? '/onboarding/owner'
+          : intended === 'professional' ? '/onboarding/professional' : '/role') as Href);
         return;
       }
       // A role picked before signing in is applied once the age check has passed.
@@ -53,7 +62,7 @@ export default function Splash() {
     return () => {
       cancelled = true;
     };
-  }, [loading, user, token, refresh, router]);
+  }, [loading, initializationFailed, user, token, refresh, router]);
 
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: space.lg, paddingHorizontal: space.xxl, backgroundColor: colors.background }}>
@@ -62,7 +71,16 @@ export default function Splash() {
       </Animated.View>
       <Text style={[type.display, { color: colors.text, textAlign: 'center' }]}>{t('app.name')}</Text>
       <Text style={[type.body, { color: colors.muted, textAlign: 'center', maxWidth: 320 }]}>{t('welcome.subtitle')}</Text>
-      <ActivityIndicator color={colors.primary} style={{ marginTop: space.lg }} />
+      {initializationFailed ? (
+        <View style={{ gap: space.md, alignItems: 'center' }}>
+          <Text accessibilityRole="alert" style={[type.body, { color: colors.text, textAlign: 'center' }]}>
+            {t('splash.initializationFailed')}
+          </Text>
+          <Button label={t('common.retry')} onPress={() => void retryInitialization()} />
+        </View>
+      ) : (
+        <ActivityIndicator color={colors.primary} style={{ marginTop: space.lg }} />
+      )}
     </View>
   );
 }
