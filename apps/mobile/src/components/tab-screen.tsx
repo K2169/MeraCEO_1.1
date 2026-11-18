@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import type { ReactNode } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { t } from '@/i18n';
@@ -11,12 +11,13 @@ import { useTheme } from './use-theme';
 // Page wrapper for the four bottom-bar tabs, and for pages opened from them (with back). A compact top bar (title on the left, small actions on the
 // right, a thin line under it) stays fixed while the content below scrolls. No long intro text: a tab
 // says what it is with its title and shows its content straight away.
-export function TabScreen({ title, actions, back = false, footer, scrollRef, onContentSizeChange, children }: { title: string; actions?: ReactNode; back?: boolean; footer?: ReactNode; scrollRef?: (instance: unknown) => void; onContentSizeChange?: () => void; children: ReactNode }) {
+export function TabScreen({ title, actions, back = false, footer, avoidKeyboard = false, scrollRef, onContentSizeChange, children }: { title: string; actions?: ReactNode; back?: boolean; footer?: ReactNode; avoidKeyboard?: boolean; scrollRef?: (instance: unknown) => void; onContentSizeChange?: () => void; children: ReactNode }) {
   const { colors, space, type } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   return (
-    <View style={{ flex: 1, backgroundColor: colors.background }}>
+    // Chat opts in so its fixed composer stays above the software keyboard.
+    <KeyboardAvoidingView enabled={avoidKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, backgroundColor: colors.background }}>
       <View
         style={{
           paddingTop: insets.top,
@@ -44,6 +45,6 @@ export function TabScreen({ title, actions, back = false, footer, scrollRef, onC
         {children}
       </ScrollView>
       {footer ? <View style={{ paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.md + insets.bottom, backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.border }}>{footer}</View> : null}
-    </View>
+    </KeyboardAvoidingView>
   );
 }

@@ -15,6 +15,8 @@ const envSchema = z.object({
   S3_BUCKET: z.string().min(1),
   S3_ACCESS_KEY_ID: z.string().min(1),
   S3_SECRET_ACCESS_KEY: z.string().min(1),
+  AGORA_APP_ID: z.string().min(1).optional(),
+  AGORA_APP_CERTIFICATE: z.string().min(1).optional(),
 });
 
 export interface Config {
@@ -24,6 +26,7 @@ export interface Config {
   googleAudiences: string[];
   supportEmail: string;
   s3: { endpoint: string; region: string; bucket: string; accessKeyId: string; secretAccessKey: string };
+  agora: { appId: string; appCertificate: string } | null;
 }
 
 // Reads and checks all server settings from the environment. Stops with a clear message if one is missing.
@@ -51,5 +54,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       accessKeyId: e.S3_ACCESS_KEY_ID,
       secretAccessKey: e.S3_SECRET_ACCESS_KEY,
     },
+    agora: e.AGORA_APP_ID && e.AGORA_APP_CERTIFICATE
+      ? { appId: e.AGORA_APP_ID, appCertificate: e.AGORA_APP_CERTIFICATE }
+      : null,
   };
 }

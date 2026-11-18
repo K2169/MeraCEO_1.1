@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react';
 
 import { initializePreferences, usePreferences } from '@/features/settings/preferences';
 import { SessionProvider } from '@/features/auth/session-provider';
+import { IncomingCallListener } from '@/features/messages/incoming-call-listener';
 import { ToastProvider } from '@/components/toast';
 
 // Keep the native splash up until the fonts are ready, so no screen shows in the wrong font.
@@ -44,6 +45,7 @@ export default function RootLayout() {
   return (
     <SessionProvider>
       <ToastProvider key={preferences.language}>
+        <IncomingCallListener />
         <StatusBar style="auto" />
         <Stack screenOptions={{ headerShown: false, animation: 'fade' }} />
       </ToastProvider>

@@ -16,9 +16,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ios: {
     bundleIdentifier: BUNDLE_ID,
     supportsTablet: false,
+    infoPlist: {
+      NSCameraUsageDescription: 'MeraCEO uses your camera during one-to-one consultation calls.',
+      NSMicrophoneUsageDescription: 'MeraCEO uses your microphone during one-to-one consultation calls.',
+    },
   },
   android: {
     package: BUNDLE_ID,
+    permissions: ['CAMERA', 'RECORD_AUDIO'],
     adaptiveIcon: {
       backgroundColor: '#FFFFFF',
       foregroundImage: './assets/images/android-icon-foreground.png',

@@ -10,6 +10,10 @@
     },
     "preview": {
       "distribution": "internal",
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://meraceo-api-staging.onrender.com"
+      },
       "android": {
         "buildType": "apk"
       }

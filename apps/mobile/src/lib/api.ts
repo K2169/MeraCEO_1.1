@@ -1,7 +1,8 @@
 // Talks to apps/api only. The app never holds Mongo, B2 or Google server credentials.
 import type { WeeklyAvailabilityWindow } from '@meraceo/shared';
 
-const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? '';
+const BASE_URL =
+  process.env.EXPO_PUBLIC_API_BASE_URL ?? 'https://meraceo-api-staging.onrender.com';
 
 export type Role = 'owner' | 'professional';
 
@@ -211,6 +212,23 @@ export interface Conversation {
   unread: number;
 }
 
+export interface CallInvitation {
+  id: string;
+  requestId: string;
+  callerId: string;
+  recipientId: string;
+  status: 'ringing' | 'accepted' | 'declined' | 'ended' | 'missed';
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface CallCredentials {
+  appId: string;
+  channelName: string;
+  token: string;
+  uid: number;
+}
+
 export type ConsentChoices = Record<'matching' | 'contact_sharing' | 'notifications' | 'terms', boolean | null>;
 export type GrievanceCategory = 'technical' | 'account' | 'privacy' | 'consultation' | 'other';
 
@@ -246,6 +264,13 @@ export const api = {
   getConversations: (token: string) => request<{ conversations: Conversation[] }>('GET', '/me/conversations', { token }),
   getMessages: (token: string, requestId: string) => request<{ request: RequestItem; messages: ChatMessage[] }>('GET', `/me/requests/${requestId}/messages`, { token }),
   sendMessage: (token: string, requestId: string, body: string) => request<ChatMessage>('POST', `/me/requests/${requestId}/messages`, { token, body: { body } }),
+  getIncomingCall: (token: string) => request<{ call: CallInvitation | null }>('GET', '/me/calls/incoming', { token }),
+  getActiveCall: (token: string, requestId: string) => request<{ call: CallInvitation | null }>('GET', `/me/requests/${requestId}/calls/active`, { token }),
+  startCall: (token: string, requestId: string) => request<{ call: CallInvitation }>('POST', `/me/requests/${requestId}/calls`, { token, body: {} }),
+  updateCall: (token: string, requestId: string, callId: string, action: 'accept' | 'decline' | 'end') =>
+    request<{ call: CallInvitation }>('POST', `/me/requests/${requestId}/calls/${callId}/${action}`, { token, body: {} }),
+  getCallCredentials: (token: string, requestId: string, callId: string) =>
+    request<CallCredentials>('POST', `/me/requests/${requestId}/calls/${callId}/token`, { token, body: {} }),
   scheduleConsultation: (token: string, id: string, startsAt: string, proposalId?: string) =>
     request<RequestItem>('POST', `/me/requests/${id}/schedule`, { token, body: { startsAt, proposalId } }),
   actOnRequest: (token: string, id: string, action: 'accept' | 'decline' | 'cancel' | 'complete') =>

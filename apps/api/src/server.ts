@@ -14,6 +14,7 @@ import { MongoProfileRepository } from './profiles/repository.js';
 import { MongoUserRepository } from './users/repository.js';
 import { MongoGrievanceRepository } from './grievances/repository.js';
 import { MongoMessageRepository } from './messages/repository.js';
+import { MongoCallRepository } from './calls/repository.js';
 
 const config = loadConfig();
 const mongo = new MongoClient(config.mongo.uri);
@@ -31,6 +32,8 @@ const requests = new MongoRequestRepository(db);
 await requests.ensureIndexes();
 const messages = new MongoMessageRepository(db);
 await messages.ensureIndexes();
+const calls = new MongoCallRepository(db);
+await calls.ensureIndexes();
 const notifications = new MongoNotificationRepository(db);
 await notifications.ensureIndexes();
 const saved = new MongoSavedRepository(db);
@@ -47,6 +50,8 @@ const app = buildApp({
   needs,
   requests,
   messages,
+  calls,
+  agora: config.agora,
   notifications,
   saved,
   storage: new S3Storage(createS3Client(config.s3), config.s3.bucket),

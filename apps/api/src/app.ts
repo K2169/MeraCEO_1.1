@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import Fastify from 'fastify';
 import {
   EXPERTISE_IDS,
@@ -38,7 +39,11 @@ import { validUploadedImage } from './storage/validate-upload.js';
 import { RoleAlreadySetError, type UserRecord, type UserRepository } from './users/repository.js';
 import type { GrievanceRepository } from './grievances/repository.js';
 import { registerGrievanceRoutes } from './grievances/routes.js';
+import type { CallRecord, CallRepository, CallStatus } from './calls/repository.js';
 import type { MessageRepository } from './messages/repository.js';
+
+// agora-token is CommonJS; load it with Node's interop helper instead of synthetic ESM named imports.
+const agoraToken = createRequire(import.meta.url)('agora-token') as typeof import('agora-token');
 
 export interface AppDeps {
   sessionSecret: string;
@@ -49,6 +54,8 @@ export interface AppDeps {
   needs: NeedRepository;
   requests: RequestRepository;
   messages: MessageRepository;
+  calls?: CallRepository;
+  agora?: { appId: string; appCertificate: string } | null;
   notifications: NotificationRepository;
   saved: SavedRepository;
   storage: Storage;
@@ -382,6 +389,7 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     if (!user) return reply;
     await deps.requests.deleteForUser(user.id);
     await deps.messages.deleteForUser(user.id);
+    await deps.calls?.deleteForUser(user.id);
     await deps.notifications.deleteForUser(user.id);
     await deps.saved.deleteForOwner(user.id);
     await deps.saved.deleteForProfessional(user.id);
@@ -939,6 +947,120 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
       createdAt: message.createdAt,
       readAt: message.readAt,
     });
+  });
+
+  // Only return invitations addressed to the authenticated user, from any conversation.
+  app.get('/me/calls/incoming', async (req, reply) => {
+    const user = await requireUser(req.headers.authorization, reply);
+    if (!user) return reply;
+    const call = await deps.calls?.findIncoming(user.id);
+    return { call: call ? { ...call, createdAt: call.createdAt.toISOString(), expiresAt: call.expiresAt.toISOString() } : null };
+  });
+
+  // Call invitations live on the accepted consultation, while Agora carries only the media stream.
+  app.get('/me/requests/:requestId/calls/active', async (req, reply) => {
+    const user = await requireUser(req.headers.authorization, reply);
+    if (!user) return reply;
+    const { requestId } = req.params as { requestId: string };
+    const request = await deps.requests.findById(requestId);
+    const isParticipant = Boolean(request && user.role && (
+      (request.ownerId === user.id && user.role === 'owner')
+      || (request.professionalId === user.id && user.role === 'professional')
+    ));
+    if (!request || !isParticipant) return reply.code(404).send({ error: 'conversation_not_found' });
+    if (request.status !== 'accepted' && request.status !== 'completed') return reply.code(409).send({ error: 'conversation_not_open' });
+    if (!deps.calls) return reply.code(503).send({ error: 'video_calls_unavailable' });
+    const call = await deps.calls.findActiveForRequest(request.id);
+    return { call: call ? { ...call, createdAt: call.createdAt.toISOString(), expiresAt: call.expiresAt.toISOString() } : null };
+  });
+
+  app.post('/me/requests/:requestId/calls', async (req, reply) => {
+    const user = await requireUser(req.headers.authorization, reply);
+    if (!user) return reply;
+    if (!user.role) return reply.code(403).send({ error: 'role_not_set' });
+    const { requestId } = req.params as { requestId: string };
+    const request = await deps.requests.findById(requestId);
+    const isOwner = request?.ownerId === user.id && user.role === 'owner';
+    const isProfessional = request?.professionalId === user.id && user.role === 'professional';
+    if (!request || (!isOwner && !isProfessional)) return reply.code(404).send({ error: 'conversation_not_found' });
+    if (request.status !== 'accepted' && request.status !== 'completed') return reply.code(409).send({ error: 'conversation_not_open' });
+    if (!deps.calls || !deps.agora) return reply.code(503).send({ error: 'video_calls_unavailable' });
+    await deps.calls.expireStaleForRequest(request.id);
+    if (await deps.calls.findActiveForRequest(request.id)) return reply.code(409).send({ error: 'call_in_progress' });
+    let call: CallRecord;
+    try {
+      call = await deps.calls.create({
+        requestId: request.id,
+        callerId: user.id,
+        recipientId: isOwner ? request.professionalId : request.ownerId,
+      });
+    } catch (error) {
+      // The unique active-key index closes the race between two simultaneous call starts.
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 11000) {
+        return reply.code(409).send({ error: 'call_in_progress' });
+      }
+      throw error;
+    }
+    return reply.code(201).send({ call: { ...call, createdAt: call.createdAt.toISOString(), expiresAt: call.expiresAt.toISOString() } });
+  });
+
+  app.post('/me/requests/:requestId/calls/:callId/:action', async (req, reply) => {
+    const user = await requireUser(req.headers.authorization, reply);
+    if (!user) return reply;
+    const { requestId, callId, action } = req.params as { requestId: string; callId: string; action: string };
+    if (!deps.calls) return reply.code(503).send({ error: 'video_calls_unavailable' });
+    const [request, call] = await Promise.all([deps.requests.findById(requestId), deps.calls.findById(callId)]);
+    const isOwner = request?.ownerId === user.id && user.role === 'owner';
+    const isProfessional = request?.professionalId === user.id && user.role === 'professional';
+    if (!request || (!isOwner && !isProfessional) || !call || call.requestId !== request.id) {
+      return reply.code(404).send({ error: 'call_not_found' });
+    }
+    if (request.status !== 'accepted' && request.status !== 'completed') return reply.code(409).send({ error: 'conversation_not_open' });
+    if ((call.status === 'ringing' || call.status === 'accepted') && call.expiresAt <= new Date()) {
+      await deps.calls.transition(call.id, [call.status], 'missed', new Date());
+      return reply.code(409).send({ error: 'call_expired' });
+    }
+
+    if (action === 'token') {
+      if (!deps.agora) return reply.code(503).send({ error: 'video_calls_unavailable' });
+      const isCaller = call.callerId === user.id;
+      const canJoin = call.status === 'accepted' || (call.status === 'ringing' && isCaller);
+      if (!canJoin || call.expiresAt <= new Date()) return reply.code(409).send({ error: 'call_not_joinable' });
+      const uid = isCaller ? 1 : 2;
+      const channelName = `call-${call.id}`;
+      const token = agoraToken.RtcTokenBuilder.buildTokenWithUid(
+        deps.agora.appId,
+        deps.agora.appCertificate,
+        channelName,
+        uid,
+        agoraToken.RtcRole.PUBLISHER,
+        3_600,
+        3_600,
+      );
+      return { appId: deps.agora.appId, channelName, token, uid };
+    }
+
+    let nextStatus: CallStatus;
+    let allowedFrom: CallStatus[];
+    let expiresAt: Date;
+    if (action === 'accept' && call.recipientId === user.id) {
+      nextStatus = 'accepted';
+      allowedFrom = ['ringing'];
+      expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+    } else if (action === 'decline' && call.recipientId === user.id) {
+      nextStatus = 'declined';
+      allowedFrom = ['ringing'];
+      expiresAt = new Date();
+    } else if (action === 'end' && (call.callerId === user.id || call.recipientId === user.id)) {
+      nextStatus = 'ended';
+      allowedFrom = ['ringing', 'accepted'];
+      expiresAt = new Date();
+    } else {
+      return reply.code(403).send({ error: 'call_action_not_allowed' });
+    }
+    const updated = await deps.calls.transition(call.id, allowedFrom, nextStatus, expiresAt);
+    if (!updated) return reply.code(409).send({ error: 'call_state_changed' });
+    return { call: { ...updated, createdAt: updated.createdAt.toISOString(), expiresAt: updated.expiresAt.toISOString() } };
   });
 
   // Accept, decline or cancel a request. The shared state machine decides what is allowed for this person.

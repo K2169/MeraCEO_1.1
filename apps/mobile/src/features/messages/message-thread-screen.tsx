@@ -1,4 +1,4 @@
-import { useLocalSearchParams } from 'expo-router';
+import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Keyboard, Pressable, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -21,6 +21,7 @@ function clock(iso: string) {
 
 export function MessageThreadScreen() {
   const { requestId } = useLocalSearchParams<{ requestId: string }>();
+  const router = useRouter();
   const { colors, radius, space, type } = useTheme();
   const { token, user } = useSession();
   const { showToast } = useToast();
@@ -34,6 +35,7 @@ export function MessageThreadScreen() {
   const [failed, setFailed] = useState(false);
   const [sendFailed, setSendFailed] = useState(false);
   const [contactBlocked, setContactBlocked] = useState(false);
+  const [startingCall, setStartingCall] = useState(false);
 
   const reload = useCallback(async () => {
     if (!token || !requestId) return;
@@ -75,6 +77,22 @@ export function MessageThreadScreen() {
     finally { setSending(false); }
   };
 
+  const startVideoCall = async () => {
+    if (!token || !requestId || startingCall) return;
+    setStartingCall(true);
+    try {
+      const { call } = await api.startCall(token, requestId);
+      router.push(`/call/${requestId}?callId=${call.id}` as Href);
+    } catch (error) {
+      const message = error instanceof ApiError && error.code === 'call_in_progress'
+        ? t('chat.callInProgress')
+        : error instanceof ApiError && error.code === 'video_calls_unavailable'
+          ? t('chat.videoNotConfigured')
+          : t('chat.callFailed');
+      showToast(message, 'error');
+    } finally { setStartingCall(false); }
+  };
+
   const footer = request && !failed ? (
     <View style={{ gap: space.xs, paddingBottom: Math.max(insets.bottom, space.sm) }}>
       {sendFailed ? <Text accessibilityRole="alert" style={[type.caption, { color: colors.danger }]}>{t('chat.sendFailed')}</Text> : null}
@@ -101,11 +119,12 @@ export function MessageThreadScreen() {
 
   return (
     <TabScreen
+      avoidKeyboard
       title={otherName || t('chat.conversation')}
       back
       actions={(
-        <Pressable accessibilityRole="button" accessibilityLabel={t('chat.videoSoon')} onPress={() => showToast(t('chat.videoSoon'), 'info')} style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}>
-          <Icon name="videocam-outline" size={23} color={colors.muted} />
+        <Pressable accessibilityRole="button" accessibilityLabel={t('chat.videoCall')} accessibilityState={{ disabled: startingCall }} disabled={startingCall} onPress={() => void startVideoCall()} style={{ width: 48, height: 48, alignItems: 'center', justifyContent: 'center', opacity: startingCall ? 0.6 : 1 }}>
+          {startingCall ? <ActivityIndicator color={colors.primary} size="small" /> : <Icon name="videocam-outline" size={23} color={colors.primary} />}
         </Pressable>
       )}
       footer={footer}

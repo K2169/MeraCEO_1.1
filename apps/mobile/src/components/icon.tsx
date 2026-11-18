@@ -1,6 +1,6 @@
 import {
   Award, Bell, Bookmark, Briefcase, Building2, Calendar, Camera, Check, ChevronDown, ChevronRight, CircleCheck, CircleMinus,
-  CircleUser, CircleX, CloudUpload, Compass, Download, Eye, EyeOff, GraduationCap, Image, Info, Lock, LogOut, MapPin, Mail, ArrowLeft, Video,
+  CircleUser, CircleX, CloudUpload, Compass, Download, Eye, EyeOff, GraduationCap, Image, Info, Lock, LogOut, MapPin, Mail, ArrowLeft, Video, Mic, MicOff, RefreshCw,
   ArrowRight, Phone, Plus, Search, Send, Settings, ShieldCheck, SlidersHorizontal, Sparkles, SquarePen, Star, Store, Target, Trash2, TrendingUp, User, Users,
 } from 'lucide-react-native';
 import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
@@ -38,6 +38,8 @@ const ICONS = {
   'log-out-outline': LogOut,
   'mail-outline': Mail,
   'mail-unread-outline': Mail,
+  'mic-outline': Mic,
+  'mic-off-outline': MicOff,
   notifications: Bell,
   'notifications-outline': Bell,
   'options-outline': SlidersHorizontal,
@@ -46,6 +48,7 @@ const ICONS = {
   'person-circle-outline': CircleUser,
   'person-outline': User,
   'remove-circle-outline': CircleMinus,
+  'refresh-outline': RefreshCw,
   'ribbon-outline': Award,
   'school-outline': GraduationCap,
   star: Star,
