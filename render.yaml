@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     region: singapore
-    autoDeployTrigger: "off"
+    autoDeployTrigger: "commit"
     buildCommand: corepack enable && pnpm install --filter @meraceo/api... --frozen-lockfile --prod=false
     startCommand: pnpm --filter @meraceo/api start:render
     healthCheckPath: /health
