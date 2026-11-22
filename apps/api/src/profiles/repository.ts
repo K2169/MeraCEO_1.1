@@ -22,14 +22,16 @@ export interface ProfileRepository {
   // Creates the profile, or replaces its answers if one already exists.
   save(userId: string, role: Role, data: Record<string, unknown>, now?: Date): Promise<ProfileRecord>;
   findByUserId(userId: string): Promise<ProfileRecord | null>;
+  // Marks the signed-in professional's own profile approved for testing.
+  approve(userId: string): Promise<boolean>;
   // Professionals who are approved and open to new requests: the pool matching ranks.
   listMatchable(): Promise<ProfileRecord[]>;
   setPhotoKey(userId: string, key: string | null): Promise<void>;
   deleteByUserId(userId: string): Promise<void>;
 }
 
-// The review status a new profile starts with.
-const startingModeration = (role: Role) => (role === 'professional' ? 'pending_review' : 'approved');
+// New profiles are visible immediately. Existing moderation states stay unchanged on edits.
+const startingModeration = () => 'approved' as const;
 
 // Stores profiles in MongoDB, one document per user.
 export class MongoProfileRepository implements ProfileRepository {
@@ -50,7 +52,7 @@ export class MongoProfileRepository implements ProfileRepository {
       {
         $set: { role, data, updatedAt: now },
         // Review status and availability are set once. Editing answers later never re-approves or resets them.
-        $setOnInsert: { userId, createdAt: now, moderation: startingModeration(role), available: true },
+        $setOnInsert: { userId, createdAt: now, moderation: startingModeration(), available: true },
       },
       { upsert: true, returnDocument: 'after' },
     );
@@ -60,6 +62,14 @@ export class MongoProfileRepository implements ProfileRepository {
 
   async findByUserId(userId: string): Promise<ProfileRecord | null> {
     return this.profiles.findOne({ userId });
+  }
+
+  async approve(userId: string): Promise<boolean> {
+    const result = await this.profiles.updateOne(
+      { userId, role: 'professional' },
+      { $set: { moderation: 'approved', updatedAt: new Date() } },
+    );
+    return result.matchedCount > 0;
   }
 
   async listMatchable(): Promise<ProfileRecord[]> {
@@ -85,7 +95,7 @@ export class InMemoryProfileRepository implements ProfileRepository {
       userId,
       role,
       data,
-      moderation: existing?.moderation ?? startingModeration(role),
+      moderation: existing?.moderation ?? startingModeration(),
       available: existing?.available ?? true,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -114,9 +124,12 @@ export class InMemoryProfileRepository implements ProfileRepository {
     this.byUser.delete(userId);
   }
 
-  // Test helper: marks a profile approved, like a reviewer would.
-  approve(userId: string): void {
+  // Marks a professional profile approved, like a reviewer would.
+  async approve(userId: string): Promise<boolean> {
     const record = this.byUser.get(userId);
-    if (record) record.moderation = 'approved';
+    if (!record || record.role !== 'professional') return false;
+    record.moderation = 'approved';
+    record.updatedAt = new Date();
+    return true;
   }
 }

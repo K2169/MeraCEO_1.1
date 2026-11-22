@@ -22,11 +22,13 @@ type OptionalChoice = 'matching' | 'contact_sharing' | 'notifications';
 export function SettingsScreen() {
   const { colors, space, type } = useTheme();
   const router = useRouter();
-  const { token, signOut } = useSession();
+  const { token, signOut, user, refresh } = useSession();
   const [choices, setChoices] = useState<ConsentChoices | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [approvalBusy, setApprovalBusy] = useState(false);
+  const [approvalComplete, setApprovalComplete] = useState(false);
   const preferences = usePreferences();
   const [info, setInfo] = useState<'help' | 'about' | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -79,6 +81,23 @@ export function SettingsScreen() {
       await Share.share({ title: 'MeraCEO data', message: JSON.stringify(data, null, 2) });
     } catch {
       setMessage(t('account.exportFailed'));
+    }
+  }
+
+  // Testing shortcut: approve this signed-in professional so owners can find the profile.
+  async function approveOwnProfile() {
+    if (!token || user?.role !== 'professional') return;
+    setApprovalBusy(true);
+    setApprovalComplete(false);
+    setMessage(null);
+    try {
+      await api.approveOwnProfessionalProfile(token);
+      await refresh();
+      setApprovalComplete(true);
+    } catch {
+      setMessage(t('settings.selfApproveFailed'));
+    } finally {
+      setApprovalBusy(false);
     }
   }
 
@@ -147,6 +166,21 @@ export function SettingsScreen() {
       <SettingsGroup>
         <SettingsRow icon="lock-closed-outline" label={t('security.title')} onPress={() => router.push('/security' as Href)} last />
       </SettingsGroup>
+
+      {user?.role === 'professional' && user.profileComplete ? (
+        <SettingsGroup title={t('settings.testing')} footer={t('settings.selfApproveDescription')}>
+          <View style={{ padding: space.lg, gap: space.sm }}>
+            <Button
+              variant="secondary"
+              label={t('settings.selfApprove')}
+              disabled={approvalBusy}
+              onPress={() => void approveOwnProfile()}
+            />
+            {user.moderation === 'approved' ? <Text style={[type.caption, { color: colors.muted }]}>{t('settings.selfApproveAlready')}</Text> : null}
+            {approvalComplete ? <Text style={[type.caption, { color: colors.accentText }]}>{t('settings.selfApproveSuccess')}</Text> : null}
+          </View>
+        </SettingsGroup>
+      ) : null}
 
       <SettingsGroup title={t('account.group.data')}>
         <SettingsRow icon="download-outline" label={t('account.export')} onPress={download} />

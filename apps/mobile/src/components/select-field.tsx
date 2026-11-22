@@ -87,7 +87,7 @@ export function SelectField<T extends string>({
           backgroundColor: colors.surface,
         }}
       >
-        <Text style={{ fontSize: 16, color: chosen ? colors.text : colors.muted }}>{chosen ?? placeholder}</Text>
+        <Text style={[type.body, { color: chosen ? colors.text : colors.muted }]}>{chosen ?? placeholder}</Text>
         <Icon name="chevron-down" size={20} color={colors.muted} />
       </Pressable>
 
@@ -101,7 +101,8 @@ export function SelectField<T extends string>({
             onChangeText={setQuery}
             autoCorrect={false}
             style={{
-              fontSize: 17,
+              fontSize: 16,
+              fontFamily: type.body.fontFamily,
               color: colors.text,
               backgroundColor: colors.background,
               borderRadius: radius.md,

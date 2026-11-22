@@ -47,7 +47,7 @@ export function Button({ label, labelPrefix, tone = 'brand', onPress, variant = 
       radius={pill ? radius.pill : radius.md}
       onPress={onPress}
       disabled={disabled}
-      style={{ minHeight: minHeight ?? (small ? 40 : 52), paddingHorizontal: small ? 16 : 20, alignItems: 'center', justifyContent: 'center' }}
+      style={{ minHeight: minHeight ?? (small ? 48 : 52), paddingHorizontal: small ? 16 : 20, alignItems: 'center', justifyContent: 'center' }}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <Text style={[labelStyle, { flexShrink: 1, textAlign: 'center' }]}>

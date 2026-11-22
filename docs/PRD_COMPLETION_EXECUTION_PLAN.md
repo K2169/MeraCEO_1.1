@@ -7,6 +7,10 @@ Source: /Users/salman/Downloads/MeraCEO_Master_PRD_V3_Consolidated.pdf
 
 Complete every Consolidated PRD MVP requirement for business owners and working professionals first. Payments remain deferred. Video calling is scheduled after the MVP work is complete. Full-product chat, reviews, insights and commercial workflows do not automatically expand this MVP pass.
 
+## User-approved scope exception (2026-11-22)
+
+P7 Insights is pulled into the current implementation at the user's request. The first screen uses real requests, scheduled consultations, currently open opportunities and the professional's saved advisory areas with 30-day, 90-day and all-time ranges. Earnings remain unavailable while P6 payments are deferred; profile views and match rate remain explicitly untracked until their data collection and definitions exist. Do not fabricate values or trend percentages.
+
 ## Parallel ownership
 
 - Business owner agent: S1A–S1D consolidation and owner-only screens. Start with four logical onboarding sections, full review, draft preservation and actionable validation.

@@ -447,6 +447,16 @@ export function buildApp(deps: AppDeps, options: { logger?: boolean } = {}) {
     return { role: profile.role, data: profile.data, updatedAt: profile.updatedAt };
   });
 
+  // Testing shortcut: a professional can approve only their own profile.
+  app.post('/me/profile/approve', async (req, reply) => {
+    const user = await requireUser(req.headers.authorization, reply);
+    if (!user) return reply;
+    if (user.role !== 'professional') return reply.code(403).send({ error: 'professionals_only' });
+    const approved = await deps.profiles.approve(user.id);
+    if (!approved) return reply.code(404).send({ error: 'no_profile' });
+    return await publicUser(user);
+  });
+
   // Discover (owner): every approved professional who can be asked, searchable and filterable, ranked by
   // how well they fit the chosen need. People who do not fit still appear, below those who do.
   app.get('/me/professionals', async (req, reply) => {

@@ -216,9 +216,7 @@ export default function GetStarted() {
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: 'auto' }}>
             <View style={{ flex: 1, height: 1, backgroundColor: colors.muted, opacity: 0.45 }} />
             <Text
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              style={[type.footnote, { color: colors.muted, textAlign: 'center', maxWidth: '86%' }]}
+              style={[type.footnote, { color: colors.muted, textAlign: 'center', flexShrink: 1, maxWidth: '86%' }]}
             >
               {t('welcome.trust')}
             </Text>

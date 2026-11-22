@@ -89,9 +89,9 @@ Audit date: 2026-11-18. Source: `/Users/salman/Downloads/MeraCEO_Master_PRD_V3_C
 - [x] English/Hindi key parity script wired into mobile lint, therefore root `pnpm check` (710 keys at introduction); wording/native-reader review remains open.
 - [x] Fetch failure recovery added to requests, consultations, notifications, account, feeds and professional draft initialization; device network-failure acceptance remains open.
 
-## Expanded screens still absent
+## Expanded screens and new scope exception
 
-S11 payment/receipts; S15/P13 feedback; P6 earnings/settlement/documents; P7 insights; P9 proposal/express-interest and owner incoming-interest responses. Payment/provider/tax/refund/cancellation and communication decisions must be recorded before dependent production integration. Full-product acceptance also requires booking revisions/expiry/no-show/dispute/refund and confirmed consultation delivery.
+S11 payment/receipts; S15/P13 feedback; P6 earnings/settlement/documents; P9 proposal/express-interest and owner incoming-interest responses remain absent. At the user's request on 2026-11-22, P7 Insights is partially implemented using actual requests, scheduled consultations, current open opportunities and professional advisory areas. Earnings remain unavailable while P6 payments are deferred; profile views and match rate are not tracked yet. Payment/provider/tax/refund/cancellation and communication decisions must be recorded before dependent production integration. Full-product acceptance also requires booking revisions/expiry/no-show/dispute/refund and confirmed consultation delivery.
 
 ## Chat scope accelerated by user request (2026-11-18)
 

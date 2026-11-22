@@ -137,7 +137,7 @@ export function AccountScreen() {
     { label: t('consultations.title'), count: activity.consultations, href: '/dashboard/owner/consultations' },
     { label: t('profile.connectedExperts'), count: activity.connected, href: '/dashboard/owner/consultations' },
     { label: t('profile.openNeeds'), count: activity.openNeeds, href: '/dashboard/owner/requests' },
-    { label: t('profile.savedExperts'), count: activity.saved, href: '/dashboard/owner?saved=true' },
+    { label: t('profile.savedExperts'), count: activity.saved, href: '/dashboard/owner/discover?saved=true' },
   ] : [];
 
   return (

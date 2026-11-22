@@ -34,7 +34,8 @@ export function Input({ label, value, onChangeText, placeholder, error, helper, 
         autoCapitalize={autoCapitalize}
         maxLength={maxLength}
         style={{
-          fontSize: 17,
+          fontSize: 16,
+          fontFamily: type.body.fontFamily,
           color: colors.text,
           backgroundColor: colors.surface,
           borderWidth: 1.5,

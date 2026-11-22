@@ -23,7 +23,7 @@ export function FilterPills<T extends string>({ pills, selected, onSelect }: { p
             onPress={() => onSelect(pill.value)}
             style={{
               paddingHorizontal: space.md + 2,
-              height: 34,
+              minHeight: 44,
               justifyContent: 'center',
               borderRadius: radius.pill,
               backgroundColor: on ? colors.primary : colors.surface,

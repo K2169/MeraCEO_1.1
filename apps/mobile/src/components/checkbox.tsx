@@ -62,7 +62,7 @@ export function Checkbox({ label, description, badge, checked, onChange }: Check
       </Animated.View>
       <View style={{ flex: 1, gap: 2 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.sm }}>
-          <Text style={[description ? type.heading : type.body, description ? { fontSize: 18, lineHeight: 24 } : null, { color: colors.text, flexShrink: 1 }]}>{label}</Text>
+          <Text style={[description ? type.heading : type.body, { color: colors.text, flexShrink: 1 }]}>{label}</Text>
           {badge ? (
             <View style={{ backgroundColor: colors.blueSoft, borderRadius: radius.pill, paddingHorizontal: space.sm, paddingVertical: 2 }}>
               <Text style={[type.caption, { color: colors.primary, fontSize: 12, lineHeight: 16 }]}>{badge}</Text>

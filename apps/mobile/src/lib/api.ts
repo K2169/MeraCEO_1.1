@@ -254,6 +254,7 @@ export const api = {
   getMatches: (token: string, needId: string) =>
     request<{ need: Need; matches: Match[] }>('GET', `/me/needs/${needId}/matches`, { token }),
   getProfile: (token: string) => request<{ role: Role; data: Record<string, unknown> }>('GET', '/me/profile', { token }),
+  approveOwnProfessionalProfile: (token: string) => request<Me>('POST', '/me/profile/approve', { token, body: {} }),
   getProfessional: (token: string, id: string) =>
     request<{ saved: boolean; professional: ProfessionalProfile; needs: { id: string; title: string; requestStatus: RequestStatus | null }[] }>('GET', `/me/professionals/${id}`, { token }),
   saveProfessional: (token: string, id: string) => request<Record<string, never>>('PUT', `/me/saved/${id}`, { token }),

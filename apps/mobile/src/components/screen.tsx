@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import type { ReactNode } from 'react';
-import { ScrollView, View } from 'react-native';
+import { ScrollView, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Icon } from './icon';
@@ -15,7 +15,18 @@ export function Screen({ children, scroll = true, back = false, tabs = false, de
   const { colors, space } = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const padding = { paddingTop: insets.top + space.lg, paddingBottom: (tabs ? 0 : insets.bottom) + space.lg, paddingHorizontal: space.xl };
+  const { width } = useWindowDimensions();
+  const horizontalInset = width < 360 ? 16 : width < 600 ? 20 : 24;
+  const contentStyle = {
+    width: '100%' as const,
+    maxWidth: 720,
+    alignSelf: 'center' as const,
+    flexGrow: 1,
+    gap: space.xl,
+    paddingTop: insets.top + space.lg,
+    paddingBottom: (tabs ? 0 : insets.bottom) + space.lg,
+    paddingHorizontal: horizontalInset,
+  };
 
   // Round, flat button with a thin outline. It is the first item on the
   // page, so it scrolls away with the content instead of floating over the title.
@@ -43,14 +54,18 @@ export function Screen({ children, scroll = true, back = false, tabs = false, de
         </>
       ) : null}
       {scroll ? (
-        <ScrollView contentContainerStyle={{ flexGrow: 1, gap: space.xl, ...padding }} keyboardShouldPersistTaps="handled">
-          {backButton}
-          {children}
+        <ScrollView contentContainerStyle={{ flexGrow: 1 }} keyboardShouldPersistTaps="handled">
+          <View style={contentStyle}>
+            {backButton}
+            {children}
+          </View>
         </ScrollView>
       ) : (
-        <View style={{ flex: 1, gap: space.xl, ...padding }}>
-          {backButton}
-          {children}
+        <View style={{ flex: 1 }}>
+          <View style={[contentStyle, { flex: 1 }]}>
+            {backButton}
+            {children}
+          </View>
         </View>
       )}
     </View>

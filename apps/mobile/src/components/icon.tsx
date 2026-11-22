@@ -1,5 +1,5 @@
 import {
-  Award, Bell, Bookmark, Briefcase, Building2, Calendar, Camera, Check, ChevronDown, ChevronRight, CircleCheck, CircleMinus,
+  Award, Bell, Bookmark, Briefcase, Building2, Calendar, Camera, Check, ChevronDown, ChevronRight, CircleCheck, CircleMinus, House,
   CircleUser, CircleX, CloudUpload, Compass, Download, Eye, EyeOff, GraduationCap, Image, Info, Lock, LogOut, MapPin, Mail, ArrowLeft, Video, Mic, MicOff, RefreshCw,
   ArrowRight, Phone, Plus, Search, Send, Settings, ShieldCheck, SlidersHorizontal, Sparkles, SquarePen, Star, Store, Target, Trash2, TrendingUp, User, Users,
 } from 'lucide-react-native';
@@ -12,6 +12,7 @@ const ICONS = {
   add: Plus,
   'arrow-back': ArrowLeft,
   'arrow-forward': ArrowRight,
+  'home-outline': House,
   'briefcase-outline': Briefcase,
   bookmark: Bookmark,
   business: Building2,

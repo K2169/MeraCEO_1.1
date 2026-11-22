@@ -22,10 +22,10 @@ function TabButton({ item, isFocused, ...rest }: { item: TabItem; isFocused?: bo
   const fade = useSelectFade(!!isFocused);
   const color = isFocused ? colors.primary : colors.muted;
   return (
-    <Pressable accessibilityRole="tab" accessibilityState={{ selected: !!isFocused }} {...rest} style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 8 }}>
-      <View style={{ width: 60, height: 32, alignItems: 'center', justifyContent: 'center' }}>
+    <Pressable accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: !!isFocused }} {...rest} style={{ flex: 1, minWidth: 0, minHeight: 60, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 2, paddingVertical: 6 }}>
+      <View style={{ width: 48, height: 32, alignItems: 'center', justifyContent: 'center' }}>
         {/* The pill behind the icon */}
-        <Animated.View style={{ position: 'absolute', width: 60, height: 32, borderRadius: 16, backgroundColor: colors.blueSoft, opacity: fade }} />
+        <Animated.View style={{ position: 'absolute', width: 48, height: 32, borderRadius: 16, backgroundColor: colors.blueSoft, opacity: fade }} />
         <View>
           <Icon name={item.icon} size={22} color={color} strokeWidth={isFocused ? 2.4 : 1.8} />
           {item.badge ? (
@@ -35,7 +35,7 @@ function TabButton({ item, isFocused, ...rest }: { item: TabItem; isFocused?: bo
           ) : null}
         </View>
       </View>
-      <Text numberOfLines={1} style={{ marginTop: 2, fontSize: 11, lineHeight: 14, color, fontFamily: isFocused ? 'DMSans_600SemiBold' : 'DMSans_500Medium' }}>
+      <Text style={{ marginTop: 2, fontSize: 12, lineHeight: 16, color, fontFamily: isFocused ? 'DMSans_600SemiBold' : 'DMSans_500Medium', textAlign: 'center', flexShrink: 1 }}>
         {item.label}
       </Text>
     </Pressable>
@@ -44,7 +44,7 @@ function TabButton({ item, isFocused, ...rest }: { item: TabItem; isFocused?: bo
 
 // The bottom tab bar shared by the owner and professional homes: a normal full-width bar with a thin line on
 // top, sitting above the phone's gesture area. Each home passes its own tabs.
-export function AppTabs({ items }: { items: TabItem[] }) {
+export function AppTabs({ items, hiddenItems = [] }: { items: TabItem[]; hiddenItems?: Pick<TabItem, 'name' | 'href'>[] }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   return (
@@ -63,6 +63,9 @@ export function AppTabs({ items }: { items: TabItem[] }) {
           <TabTrigger key={item.name} name={item.name} href={item.href} asChild>
             <TabButton item={item} />
           </TabTrigger>
+        ))}
+        {hiddenItems.map((item) => (
+          <TabTrigger key={item.name} name={item.name} href={item.href} style={{ display: 'none' }} />
         ))}
       </TabList>
     </Tabs>

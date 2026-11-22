@@ -95,18 +95,18 @@ export const fontFamily = {
   extrabold: 'DMSans_800ExtraBold',
 } as const;
 
-export const space = { xs: 4, sm: 8, md: 14, lg: 20, xl: 28, xxl: 40 } as const;
+export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const;
 
 // Corner radius scale: modest corners for a calm, professional look. Pill is for chips and tags.
 export const radius = { sm: 8, md: 12, lg: 16, pill: 999 } as const;
 
 // Text styles: display for hero text, title for screen headings, heading for cards, body for reading, caption for helper text.
 export const type = {
-  display: { fontSize: 30, fontFamily: fontFamily.extrabold, lineHeight: 36 },
-  title: { fontSize: 22, fontFamily: fontFamily.bold, lineHeight: 28 },
-  heading: { fontSize: 17, fontFamily: fontFamily.bold, lineHeight: 24 },
+  display: { fontSize: 28, fontFamily: fontFamily.extrabold, lineHeight: 36 },
+  title: { fontSize: 20, fontFamily: fontFamily.bold, lineHeight: 26 },
+  heading: { fontSize: 16, fontFamily: fontFamily.bold, lineHeight: 22 },
   body: { fontSize: 15, fontFamily: fontFamily.regular, lineHeight: 22 },
-  footnote: { fontSize: 11, fontFamily: fontFamily.medium, lineHeight: 16 },
+  footnote: { fontSize: 12, fontFamily: fontFamily.medium, lineHeight: 16 },
   caption: { fontSize: 13, fontFamily: fontFamily.semibold, lineHeight: 18 },
 } as const;
 
